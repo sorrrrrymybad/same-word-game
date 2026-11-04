@@ -98,7 +98,9 @@ h1{margin:0;font-size:30px;letter-spacing:.14em}
 .record-answers .result-player{flex-basis:calc((100% - 24px)/2);display:flex;flex-direction:column}
 .record-answers .answer{flex:1;border-color:var(--player-fg)}
 .record-answers .player-name{color:var(--player-fg)}
-#recordbackbtn{margin-bottom:16px;padding:8px 12px;min-height:44px;font-size:13px}
+.record-actions{display:flex;justify-content:space-between;gap:12px;margin:16px 0}
+.record-actions button{padding:8px 12px;min-height:44px;font-size:13px}
+#recorddeletebtn{color:var(--warn)}
 #recorddetailrounds{margin-top:20px;padding-top:16px;border-top:1px dashed var(--field-line)}
 #recorddetailrounds .player-name{display:none}
 h2{margin:0 0 16px;font-size:16px;font-weight:600;color:var(--dim);letter-spacing:.08em}
@@ -378,9 +380,21 @@ summary:hover{color:var(--fg)}
     <ul id="recordslist"></ul>
   </div>
   <div id="recorddetailpanel" hidden>
-    <button id="recordbackbtn" class="ghost">返回列表</button>
+    <div class="record-actions">
+      <button id="recordbackbtn" class="ghost">返回列表</button>
+      <button id="recorddeletebtn" class="ghost">删除记录</button>
+    </div>
     <div id="recorddetailsummary"></div>
     <div id="recorddetailrounds" aria-label="完整对局记录"></div>
+  </div>
+</dialog>
+<dialog id="recorddeletedialog" aria-labelledby="recorddeletetitle" aria-describedby="recorddeletehint">
+  <h2 id="recorddeletetitle" tabindex="-1" autofocus>删除这条记录？</h2>
+  <p class="votes" id="recorddeletehint">这条对局记录将从本地删除，删除后无法恢复。</p>
+  <p class="votes" id="recorddeleteerror" role="alert" hidden></p>
+  <div class="row">
+    <button id="recorddeletecancel" class="ghost">取消</button>
+    <button id="recorddeleteconfirm">确认删除</button>
   </div>
 </dialog>
 <dialog id="votedialog" aria-labelledby="votetitle" aria-describedby="votehint">
@@ -601,10 +615,20 @@ function showLocalRecord(id) {
   $('recordsnotice').hidden = true;
   $('recordslistpanel').hidden = true;
   $('recorddetailpanel').hidden = false;
+  $('recorddeletebtn').dataset.recordId = record.id;
   $('recorddetailsummary').innerHTML = recordSummary(record);
   $('recorddetailrounds').innerHTML = record.history.map((r) => roundCard(r, false, record.players)).join('');
   $('recordsdialog').scrollTop = 0;
   $('recordstitle').focus({ preventScroll: true });
+}
+
+function deleteLocalRecord(id) {
+  const records = readLocalRecords();
+  if (!records) return false;
+  try { localStorage.setItem(RECORDS_KEY, JSON.stringify(records.filter((r) => r.id !== id))); }
+  catch { return false; }
+  renderLocalRecords();
+  return true;
 }
 
 function stopRoundMotion() {
@@ -863,6 +887,20 @@ $('lobbylink').onclick = (e) => e.target.select();
 $('recordsbtn').onclick = () => { renderLocalRecords(); $('recordsdialog').showModal(); };
 $('recordsclose').onclick = () => $('recordsdialog').close();
 $('recordbackbtn').onclick = () => { renderLocalRecords(); $('recordstitle').focus({ preventScroll: true }); };
+$('recorddeletebtn').onclick = () => {
+  $('recorddeleteerror').hidden = true;
+  $('recorddeletedialog').showModal();
+};
+$('recorddeletecancel').onclick = () => $('recorddeletedialog').close();
+$('recorddeleteconfirm').onclick = () => {
+  if (deleteLocalRecord($('recorddeletebtn').dataset.recordId)) {
+    $('recorddeletedialog').close();
+    $('recordstitle').focus({ preventScroll: true });
+  } else {
+    $('recorddeleteerror').textContent = '删除失败，原有记录已保留。请检查浏览器的存储权限后重试。';
+    $('recorddeleteerror').hidden = false;
+  }
+};
 $('recordslist').onclick = (e) => {
   const button = e.target.closest('button[data-record-id]');
   if (button) showLocalRecord(button.dataset.recordId);

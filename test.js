@@ -505,13 +505,13 @@ const archive = {
     getItem(key) { return recordStorage.get(key) ?? null; },
     setItem(key, value) { if (failRecordWrite) throw new Error('quota'); recordStorage.set(key, value); },
   },
-  $: (id) => { if (!recordElements.has(id)) recordElements.set(id, { focus() { this.focused = true; } }); return recordElements.get(id); },
+  $: (id) => { if (!recordElements.has(id)) recordElements.set(id, { dataset: {}, focus() { this.focused = true; } }); return recordElements.get(id); },
   esc: (s) => String(s ?? '').replace(/[&<>\"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])),
   toast: (msg) => recordMessages.push(msg),
 };
 vm.createContext(archive);
 vm.runInContext(page.match(/const PLAYER_COLORS = \[[\s\S]*?\n\];/)[0] + '\n' +
-  ['playerStyle', 'roundCard', 'readLocalRecords', 'saveSuccessfulGame', 'recordSummary', 'renderLocalRecords', 'showLocalRecord']
+  ['playerStyle', 'roundCard', 'readLocalRecords', 'saveSuccessfulGame', 'recordSummary', 'renderLocalRecords', 'showLocalRecord', 'deleteLocalRecord']
     .map((name) => page.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))[0]).join('\n'), archive);
 const completedGame = {
   phase: 'done', gameId: 'game-one', completedAt: Date.now(), endedBy: 'match', interrupted: false,
@@ -548,17 +548,21 @@ assert.match(recordElements.get('recordslist').innerHTML, /&lt;甲&gt;/);
 archive.showLocalRecord('game-one');
 assert.equal(recordElements.get('recordsnotice').hidden, true);
 assert.equal(recordElements.get('recorddetailpanel').hidden, false);
+assert.equal(recordElements.get('recorddeletebtn').dataset.recordId, 'game-one');
 assert.match(recordElements.get('recorddetailrounds').innerHTML, /第 1 轮/);
 assert.match(recordElements.get('recorddetailrounds').innerHTML, /第 2 轮/);
 assert.match(recordElements.get('recorddetailrounds').innerHTML, /&lt;b&gt;猫&lt;\/b&gt;/);
 assert.match(recordElements.get('recorddetailrounds').innerHTML, /--player-fg:#8c4b23/, '脱离房间后仍保留当局颜色，不受原房间空位影响');
 const savedBeforeError = recordStorage.get(archive.RECORDS_KEY);
 failRecordWrite = true;
+assert.equal(archive.deleteLocalRecord('game-one'), false);
+assert.equal(recordStorage.get(archive.RECORDS_KEY), savedBeforeError, '删除写入失败时保留所有记录');
 archive.saveSuccessfulGame({ ...completedGame, gameId: 'game-quota' });
 assert.equal(recordStorage.get(archive.RECORDS_KEY), savedBeforeError, '存储失败不能删除已有战绩');
 assert.match(recordMessages.at(-1), /未保存/);
 failRecordWrite = false;
 recordStorage.set(archive.RECORDS_KEY, 'broken json');
+assert.equal(archive.deleteLocalRecord('game-one'), false);
 archive.saveSuccessfulGame({ ...completedGame, gameId: 'game-corrupt' });
 assert.equal(recordStorage.get(archive.RECORDS_KEY), 'broken json', '读取失败不能覆盖原始数据');
 archive.renderLocalRecords();
@@ -567,6 +571,14 @@ recordStorage.clear();
 archive.renderLocalRecords();
 assert.equal(recordElements.get('recordsempty').hidden, false);
 assert.match(recordElements.get('recordsempty').textContent, /还没有/);
+recordStorage.set(archive.RECORDS_KEY, savedBeforeError);
+assert.equal(archive.deleteLocalRecord('game-one'), true);
+assert.deepEqual(JSON.parse(recordStorage.get(archive.RECORDS_KEY)).map((r) => r.id), ['game-two'], '仅删除选中的记录');
+assert.equal(recordElements.get('recorddetailpanel').hidden, true, '删除后返回列表');
+assert.equal(recordElements.get('recordsnotice').hidden, false);
+assert.doesNotMatch(recordElements.get('recordslist').innerHTML, /game-one/);
+assert.equal(archive.deleteLocalRecord('game-two'), true);
+assert.equal(recordElements.get('recordsempty').hidden, false, '删除最后一条后显示空状态');
 
 /* ---------- 配色对比度守卫：改配色前先过这一关 ---------- */
 const lin = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };

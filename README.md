@@ -48,6 +48,20 @@ npm test         # 端到端自检
 
 局域网测试用启动时打印的地址，不要用 localhost，否则「复制链接」拷出来的地址对方打不开。
 
+## PM2 部署
+
+服务器已安装 Node.js 和 PM2 后，在项目目录执行：
+
+```bash
+npm ci --omit=dev
+pm2 start ecosystem.config.cjs
+pm2 save
+```
+
+部署时一并上传 `ecosystem.config.cjs`。该配置使用单进程，监听 **3001** 端口；Nginx 的 `proxy_pass` 对应设置为 `http://127.0.0.1:3001`，并保留 WebSocket 转发配置。
+
+查看日志用 `pm2 logs same-word-game`，更新代码后用 `pm2 restart ecosystem.config.cjs`。重启会清空现有房间。需要开机启动时，执行 `pm2 startup` 并按提示完成系统配置。
+
 ## 设计取舍
 
 - 只有 `ws` 一个依赖，前端零框架零构建，一个页面一个服务端文件
