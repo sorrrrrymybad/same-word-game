@@ -1,0 +1,955 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#e3e9ff">
+<title>同频猜词｜猜不中就跑 200 米</title>
+<link rel="icon" type="image/png" sizes="256x256" href="/favicon.png">
+<link rel="icon" type="image/x-icon" sizes="16x16 32x32 48x48" href="/favicon.ico">
+<script>
+// 在 CSS 之前定好主题，避免首屏闪一下
+(function () {
+  var t = localStorage.getItem('swg-theme') || 'auto';
+  var light = matchMedia('(prefers-color-scheme: light)').matches;
+  document.documentElement.dataset.theme = t === 'auto' ? (light ? 'light' : 'dark') : t;
+})();
+</script>
+<style>
+*{box-sizing:border-box}
+/* 对比度都过了 WCAG AA，测试里有守卫盯着，改配色前先看 test.js */
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0e1016;--card:#171a23;--card2:#232838;
+  --line:#333a4d;--line-strong:#414a61;--field-line:#6b7794;
+  --fg:#e9ecf5;--dim:#9aa2b6;
+  --accent:#9b80ff;--accent-solid:#6a45ff;--on-accent:#ffffff;
+  --accent-soft:rgba(155,128,255,.16);--accent-text:#b6a3ff;
+  --ok:#43d19e;--ok-ink:#06251a;--warn:#ff7b7b;
+  --ok-soft:rgba(67,209,158,.14);--ok-line:rgba(67,209,158,.42);
+  --warn-soft:rgba(255,123,123,.12);
+  --glow:#1d2440;--focus:#9b80ff;
+  --shadow:0 10px 30px rgba(0,0,0,.5);
+  --card-shadow:inset 0 1px 0 rgba(255,255,255,.045),0 24px 56px -34px rgba(0,0,0,.95);
+  --btn-shadow:inset 0 1px 0 rgba(255,255,255,.2),0 8px 18px -10px rgba(106,69,255,.85);
+  --fx-1:#7c5cff;--fx-2:#4fd3ff;--fx-3:#43d19e;--fx-4:#ffd166;--fx-5:#ff6b9d;
+}
+:root[data-theme="light"]{
+  color-scheme:light;
+  --bg:#f4f6fb;--card:#ffffff;--card2:#eaeef7;
+  --line:#d5dbe8;--line-strong:#b9c1d4;--field-line:#7d88a3;
+  --fg:#171a24;--dim:#5c6474;
+  --accent:#6a45ff;--accent-solid:#6a45ff;--on-accent:#ffffff;
+  --accent-soft:rgba(106,69,255,.10);--accent-text:#5a37d6;
+  --ok:#0a7a55;--ok-ink:#ffffff;--warn:#c4332d;
+  --ok-soft:rgba(10,122,85,.10);--ok-line:rgba(10,122,85,.4);
+  --warn-soft:rgba(196,51,45,.08);
+  --glow:#e3e9ff;--focus:#6a45ff;
+  --shadow:0 10px 30px rgba(25,32,60,.14);
+  --card-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 22px 48px -34px rgba(30,41,80,.45);
+  --btn-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 8px 18px -10px rgba(106,69,255,.6);
+  --fx-1:#6a45ff;--fx-2:#0b8ec0;--fx-3:#0a7a55;--fx-4:#f0a500;--fx-5:#e8447a;
+}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+html{min-height:100%;background-color:var(--glow)}
+body{
+  margin:0;min-height:100dvh;display:flex;align-items:center;justify-content:center;
+  padding:calc(24px + env(safe-area-inset-top,0px)) calc(24px + env(safe-area-inset-right,0px))
+          calc(24px + env(safe-area-inset-bottom,0px)) calc(24px + env(safe-area-inset-left,0px));
+  background-color:var(--glow);color:var(--fg);
+  font:15px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+#fx{position:fixed;inset:0;pointer-events:none;z-index:99}
+#themebtn{
+  position:fixed;z-index:110;display:inline-flex;align-items:center;justify-content:center;
+  top:calc(8px + env(safe-area-inset-top,0px));
+  right:calc(18px + env(safe-area-inset-right,0px));
+  width:44px;height:44px;padding:0;border-radius:50%;
+  background:var(--card);border:1px solid var(--line-strong);color:var(--dim);
+  font-size:18px;line-height:1;letter-spacing:0;box-shadow:var(--shadow);
+}
+@media (hover:hover) and (pointer:fine){
+  #themebtn:hover:not(:active){filter:none;color:var(--fg);border-color:var(--accent)}
+}
+::view-transition{pointer-events:none}
+::view-transition-old(root),::view-transition-new(root){animation:none;mix-blend-mode:normal}
+::view-transition-old(root){z-index:1}
+::view-transition-new(root){z-index:2}
+main{width:100%;max-width:540px;min-width:0}
+#play{display:grid;gap:16px}
+#play>section{min-width:0}
+section{background:var(--card);border:1px solid var(--line-strong);border-radius:20px;padding:28px;box-shadow:var(--card-shadow);animation:in .28s ease}
+@keyframes in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+h1{margin:0;font-size:30px;letter-spacing:.14em}
+.sub{margin:6px 0 24px;color:var(--dim);font-size:13px;letter-spacing:.06em}
+.home-heading,.records-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.home-heading h1{min-width:0}
+.icon-button{display:inline-flex;align-items:center;justify-content:center;flex:0 0 44px;width:44px;height:44px;padding:0}
+.icon-button svg{width:21px;height:21px}
+#recordsbtn{font-size:21px}
+#recordsdialog{max-width:540px}
+.records-heading h2{margin:0;color:var(--fg)}
+.records-note{margin:12px 0 18px;color:var(--dim);font-size:12px;line-height:1.8}
+#recordslist{display:grid;gap:12px}
+.record-entry{display:block;width:100%;padding:14px;text-align:left}
+.record-meta{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 10px;color:var(--dim);font-size:12px}
+.record-answers{margin:12px 0 6px}
+.record-answers .result-player{flex-basis:calc((100% - 24px)/2);display:flex;flex-direction:column}
+.record-answers .answer{flex:1;border-color:var(--player-fg)}
+.record-answers .player-name{color:var(--player-fg)}
+#recordbackbtn{margin-bottom:16px;padding:8px 12px;min-height:44px;font-size:13px}
+#recorddetailrounds{margin-top:20px;padding-top:16px;border-top:1px dashed var(--field-line)}
+#recorddetailrounds .player-name{display:none}
+h2{margin:0 0 16px;font-size:16px;font-weight:600;color:var(--dim);letter-spacing:.08em}
+label,legend{display:block;font-size:12px;color:var(--dim);margin:0 0 6px;padding:0;letter-spacing:.06em}
+input,button{font:inherit;color:inherit}
+input:not([type]){
+  /* 避免手机浏览器聚焦小字号表单时自动放大页面 */
+  font-size:16px;
+  width:100%;padding:11px 13px;background:var(--card2);border:1px solid var(--field-line);
+  border-radius:12px;outline:none;transition:border-color .15s,box-shadow .15s;
+}
+input:not([type]):focus{border-color:var(--focus);box-shadow:0 0 0 3px var(--accent-soft)}
+label[for="cfgmax"]{display:flex;justify-content:space-between}
+input[type="range"]{display:block;width:100%;height:44px;margin:0;accent-color:var(--accent-solid);cursor:pointer}
+fieldset{border:0;padding:0;margin:0;min-width:0}
+.timeout-options{display:flex;gap:8px}
+.timeout-options label{display:flex;align-items:center;justify-content:center;flex:1;min-height:44px;margin:0;border:1px solid var(--field-line);border-radius:12px;background:var(--card2);color:var(--fg);font-size:14px;letter-spacing:0;cursor:pointer}
+.timeout-options label:has(:checked){border-color:var(--focus);background:var(--accent-soft)}
+.timeout-options label:has(:focus-visible){outline:3px solid var(--focus);outline-offset:2px}
+input:disabled{opacity:.45}
+.row{display:flex;gap:10px}
+.row>input{flex:1;min-width:0}
+.row>div{flex:1}
+.field{margin-bottom:14px}
+.word-label{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:6px}
+.word-label label{margin:0}
+.word-label span{color:var(--dim);font-size:11px;letter-spacing:0;white-space:nowrap}
+.word-label .submitted{color:var(--ok);animation:submitted .16s ease-out}
+.word-label .submitted::before{content:'✓';display:inline-block;margin-right:4px;animation:check-in .13s ease-out}
+@keyframes submitted{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:translateY(0)}}
+@keyframes check-in{from{opacity:0;transform:scale(.65)}to{opacity:1;transform:scale(1)}}
+button{
+  padding:12px 20px;border:0;border-radius:12px;background:var(--accent-solid);color:var(--on-accent);
+  font-weight:600;box-shadow:var(--btn-shadow);cursor:pointer;
+  transition:filter .15s,opacity .15s,transform .1s,background-color .15s,color .15s,border-color .15s;
+}
+@media (hover:hover) and (pointer:fine){
+  button:hover:not(:disabled):not(:active){filter:brightness(1.1)}
+}
+button:active:not(:disabled){filter:brightness(.92);transform:translateY(1px);box-shadow:none}
+button:disabled{opacity:.4;cursor:not-allowed;box-shadow:none}
+button.ghost{background:var(--card2);border:1px solid var(--field-line);color:var(--fg);font-weight:500;box-shadow:none}
+button.ok{background:var(--ok);color:var(--ok-ink);box-shadow:none}
+button.voted{background:var(--card2);border:1px solid var(--ok);color:var(--ok);font-weight:500;box-shadow:none}
+dialog{width:calc(100% - 48px);max-width:420px;max-height:calc(100dvh - 48px);overflow:auto;padding:24px;border:1px solid var(--line-strong);border-radius:20px;background:var(--card);color:var(--fg);box-shadow:var(--shadow)}
+dialog{opacity:0;transform:scale(.97);transition:opacity .12s ease,transform .12s ease,display .12s allow-discrete,overlay .12s allow-discrete}
+dialog[open]{opacity:1;transform:scale(1);transition-duration:.16s}
+dialog::backdrop{background:rgba(0,0,0,0);transition:background-color .12s ease,display .12s allow-discrete,overlay .12s allow-discrete}
+dialog[open]::backdrop{background:rgba(0,0,0,.55);transition-duration:.16s}
+@starting-style{
+  dialog[open]{opacity:0;transform:scale(.97)}
+  dialog[open]::backdrop{background:rgba(0,0,0,0)}
+}
+dialog .row{margin-top:20px;flex-wrap:wrap}
+dialog .row button{flex:1}
+
+/* 键盘焦点必须看得见 */
+:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+dialog h2[tabindex="-1"]:focus{outline:none}
+input:not([type]):focus-visible{outline:none}
+.wide{width:100%}
+.mt{margin-top:16px}
+.divider{display:flex;align-items:center;gap:12px;margin:24px 0;color:var(--dim);font-size:12px}
+.divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--line)}
+.code{font:700 34px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.3em;color:var(--accent)}
+ul{list-style:none;margin:0;padding:0}
+#lobbyplayers{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 24px}
+#lobbyplayers li{position:relative;display:flex;align-items:center;justify-content:center;min-width:0;height:49px}
+#lobbyplayers li.arriving{animation:player-in .18s ease-out}
+@keyframes player-in{from{opacity:0;transform:scale(.98)}to{opacity:1;transform:scale(1)}}
+#lobbyplayers .seat-link{position:absolute;left:-24px;width:24px;text-align:center;color:var(--dim);font-size:20px}
+#lobbyplayers .player-slot{position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;width:100%;height:100%;padding:10px 12px;background:var(--player-bg);color:var(--player-fg);border-radius:12px}
+#lobbyplayers .lobby-name{position:relative;z-index:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#lobbyplayers .empty-slot{width:100%;height:100%;border:1.5px dashed var(--field-line);border-radius:12px}
+#lobbyplayers .host-mark{position:absolute;left:4px;top:-8px;z-index:2;font-size:18px;line-height:1;pointer-events:none;user-select:none}
+#lobbyplayers .off{position:relative;z-index:1;flex-shrink:0;font-style:normal;font-size:11px;color:inherit;border:1px solid currentColor;border-radius:6px;padding:1px 6px;margin-left:8px}
+.cfg{color:var(--dim);font-size:12.5px;margin:14px 0 18px}
+#waithost{margin:28px 0 8px;text-align:center}
+#waithost:not([hidden])+#lobbyhomebtn{margin-top:0}
+.round{color:var(--dim);font-size:12px;letter-spacing:.14em;margin-bottom:10px}
+.bar{height:3px;background:var(--card2);border-radius:2px;overflow:hidden;margin:14px 0 4px}
+.bar i{display:block;height:100%;width:100%;background:linear-gradient(90deg,var(--accent),var(--fx-2));transition:width .15s linear}
+#clock{color:var(--dim);font-size:11px;text-align:right;letter-spacing:.08em}
+.dots{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}
+.dot{padding:4px 11px;border-radius:999px;font-size:12px;background:var(--player-bg);color:var(--player-fg);border:1px solid transparent;transition:all .2s}
+.dot.on{border-color:currentColor}
+.votes{margin-top:10px;color:var(--dim);font-size:12px;line-height:1.9;letter-spacing:.04em}
+#votestate{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}
+#restartplayers{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:8px}
+.ready-square{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border:1.5px solid var(--player-fg);border-radius:4px;color:var(--player-fg);font-size:13px;line-height:1;transition:background-color .15s,color .15s}
+.ready-square::after{content:'✓';opacity:0;transform:scale(.65);transition:opacity .13s,transform .13s ease-out}
+.ready-square.on{background:var(--player-fg);color:var(--player-bg)}
+.ready-square.on::after{opacity:1;transform:scale(1)}
+.ready-square svg{display:none;width:14px;height:14px}
+.ready-square.offline{background:var(--player-bg)}
+.ready-square.offline::after{display:none}
+.ready-square.offline svg{display:block}
+.vote-square{flex:0 0 18px;width:18px;height:18px;border-radius:4px;background:var(--warn)}
+.vote-square.agree{background:var(--ok)}
+.result-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
+.vh{font-size:12px;color:var(--dim);letter-spacing:.1em}
+#votebtn{padding:3px 10px;min-height:32px;font-size:12px;white-space:nowrap}
+#lastwrap{animation:none}
+#roundresults{max-height:42dvh;overflow-y:auto;overscroll-behavior:contain;overflow-anchor:none}
+.rnd{border-radius:12px;margin-bottom:14px}
+.rnd.pending{opacity:0;transform:translateY(12px)}
+.rnd.revealing{animation:result-in .2s ease-out}
+@keyframes result-in{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+.rndhead{font-size:12px;color:var(--dim);letter-spacing:.1em;margin-bottom:8px}
+.rndwords{display:flex;gap:24px;overflow-x:auto;padding-bottom:6px;font-size:14.5px}
+.result-player{flex:1 0 calc((100% - 48px)/3);min-width:0;text-align:center}
+.answer{position:relative;display:block;overflow-wrap:anywhere;padding:9px 8px;border-radius:10px;border:1px solid transparent;background:var(--player-bg);color:var(--player-fg)}
+.result-player+.result-player .answer::before{content:'×';position:absolute;left:-25px;top:50%;transform:translateY(-50%);width:24px;color:var(--dim);font-weight:600}
+.player-name{display:block;margin-bottom:2px;color:var(--dim);font-size:12px;text-align:left;overflow-wrap:anywhere}
+details{margin-bottom:12px}
+summary{display:flex;align-items:center;min-height:44px;cursor:pointer;color:var(--dim);font-size:12.5px;letter-spacing:.06em;list-style:none;border-radius:8px}
+summary::-webkit-details-marker{display:none}
+summary::before{content:"";flex:0 0 8px;width:8px;height:10px;background:currentColor;clip-path:polygon(0 0,100% 50%,0 100%);transition:transform .15s}
+details[open] summary::before{transform:rotate(90deg)}
+summary:hover{color:var(--fg)}
+#donehistory summary{justify-content:center;gap:12px;padding:10px 14px;background:var(--card2);border:1px solid var(--field-line);border-radius:12px;color:var(--fg);font-size:14px}
+#donehistory.closing summary::before{transform:rotate(0)}
+#donehistorybody{display:flow-root;overflow:hidden}
+#donehistoryresults{padding-top:16px}
+#done{text-align:center}
+#done .rnd{text-align:left}
+.done-footer{margin-top:20px;padding-top:16px;border-top:1px dashed var(--field-line)}
+.done-footer .votes{margin-top:0}
+.done-actions button{flex:1;min-width:0;padding:12px 8px;font-size:14px}
+.success-round{margin:24px 0}
+.success-round .rndhead{font-size:14px;text-align:left;margin-bottom:18px}
+.success-round .rndwords{flex-direction:column;gap:28px;overflow:visible}
+.success-round .result-player{position:relative;flex:auto;padding:20px 14px;border-radius:18px;background:var(--player-bg);color:var(--player-fg)}
+.success-round .player-name{text-align:center;color:inherit;margin-bottom:6px}
+.success-round .answer{padding:0;border:0;background:none;color:inherit;font-size:clamp(26px,6vw,38px);font-weight:700}
+.success-round .answer::before{display:none}
+/* 乘号字形的视觉中心比行盒中心低约 2px。 */
+.success-round .result-player+.result-player::before{content:'×';position:absolute;display:flex;align-items:center;justify-content:center;top:-28px;left:0;width:100%;height:28px;transform:translateY(-2px);color:var(--dim);font-size:28px;font-weight:600;line-height:1}
+.success-round.many .rndwords{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 24px}
+.success-round.many .result-player{padding:12px 8px;border-radius:12px}
+.success-round.many .answer{font-size:clamp(18px,4.5vw,26px)}
+.success-round.many .result-player::before{display:none}
+.success-round.many .result-player:nth-child(even)::before{display:flex;top:50%;left:-24px;width:24px;transform:translateY(calc(-50% - 2px))}
+.slogan{font-size:20px;letter-spacing:.22em;color:var(--fg);margin:18px 0 4px}
+.slogan-sub{color:var(--dim);font-size:13px;letter-spacing:.1em}
+#totalrounds{margin-top:26px;color:var(--dim);font-size:12px;letter-spacing:.18em}
+#toast{
+  position:fixed;left:50%;top:26px;transform:translateX(-50%);z-index:120;
+  background:var(--card2);border:1px solid var(--warn);color:var(--warn);
+  padding:10px 20px;border-radius:999px;font-size:13.5px;box-shadow:var(--shadow);
+}
+[hidden]{display:none!important}
+
+/* 晕动症用户：所有动效和彩带都停掉 */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
+  dialog::backdrop{transition:none!important}
+  section{animation:none}
+  button:active:not(:disabled){transform:none}
+}
+</style>
+</head>
+<body>
+<canvas id="fx" aria-hidden="true" hidden></canvas>
+<button id="themebtn" title="切换主题"></button>
+<main>
+
+<section id="home">
+  <div class="home-heading">
+    <h1>同频猜词</h1>
+    <button id="recordsbtn" class="ghost icon-button" aria-label="查看本地战绩" title="本地战绩">历</button>
+  </div>
+  <p class="sub">平时聊得挺好，看看是不是各聊各的。</p>
+
+  <div class="field">
+    <label>你的昵称</label>
+    <input id="name" maxlength="12" placeholder="留空，系统替你起个名">
+  </div>
+
+  <div class="field">
+    <label for="cfgmax">人数上限 <output id="cfgmaxvalue" for="cfgmax">2 人</output></label>
+    <input id="cfgmax" type="range" min="2" max="8" step="1" value="2">
+  </div>
+
+  <fieldset class="field">
+    <legend>每轮限时</legend>
+    <div class="timeout-options">
+      <label><input class="sr-only" type="radio" name="cfgtimeout" value="30">30 秒</label>
+      <label><input class="sr-only" type="radio" name="cfgtimeout" value="60">60 秒</label>
+      <label><input class="sr-only" type="radio" name="cfgtimeout" value="0" checked>不限时</label>
+    </div>
+  </fieldset>
+
+  <button id="createbtn" class="wide">组个局</button>
+
+  <div class="divider">或加入</div>
+
+  <div class="field">
+    <label>房间码</label>
+    <input id="joincode" maxlength="4" placeholder="邀请码" autocapitalize="characters" style="text-transform:uppercase;letter-spacing:.2em">
+  </div>
+  <button id="joinbtn" class="ghost wide">加入这局</button>
+</section>
+
+<section id="lobby" hidden>
+  <h2>房间已就绪，默契待验证</h2>
+  <div style="text-align:center;margin-bottom:18px"><div class="code" id="lobbycode"></div></div>
+  <div class="field">
+    <label>邀请链接</label>
+    <div class="row">
+      <input id="lobbylink" readonly>
+      <button id="copybtn" class="ghost" style="flex:0 0 auto">复制</button>
+    </div>
+  </div>
+  <div class="cfg" id="lobbycfg"></div>
+  <h2>玩家 <span id="lobbycount"></span></h2>
+  <ul id="lobbyplayers"></ul>
+  <button id="startbtn" class="wide mt">开始对频</button>
+  <p id="waithost" class="cfg">等待房主开始</p>
+  <button id="lobbyhomebtn" class="ghost wide mt">返回主页</button>
+</section>
+
+<div id="play" hidden>
+  <section id="lastwrap" aria-label="每轮结果" hidden>
+    <div class="result-header">
+      <div class="vh">每轮结果</div>
+      <button id="votebtn" class="ok"></button>
+    </div>
+    <div id="roundresults" role="region" aria-label="历史轮次，可上下滚动" tabindex="0"></div>
+  </section>
+
+  <section aria-label="提交词">
+    <div class="round" id="roundno"></div>
+    <div class="field">
+      <div class="word-label"><label for="word">你的词</label><span id="wordhint" role="status" aria-live="polite" aria-atomic="true">提交后不可修改</span></div>
+      <div class="row">
+        <input id="word" maxlength="20" placeholder="写个词，试试默契" aria-describedby="wordhint" autocomplete="off">
+        <button id="submitbtn" style="flex:0 0 auto">提交</button>
+      </div>
+    </div>
+    <div class="bar"><i id="barfill"></i></div>
+    <div id="clock"></div>
+    <div class="dots" id="submitted"></div>
+  </section>
+</div>
+
+<section id="done" hidden>
+  <div class="slogan" id="doneslogan"></div>
+  <div class="slogan-sub" id="donesub"></div>
+  <div id="successresults" aria-label="成功轮结果"></div>
+  <div class="round" id="totalrounds"></div>
+  <details id="donehistory" hidden>
+    <summary id="donehistorylabel"></summary>
+    <div id="donehistorybody"><div id="donehistoryresults"></div></div>
+  </details>
+  <div class="done-footer">
+    <div class="votes" role="status" aria-live="polite" aria-atomic="true">
+      <div id="restartcount"></div>
+      <div id="restartplayers"></div>
+    </div>
+    <div class="row done-actions mt">
+      <button id="restartbtn" class="ghost" title="再来，刚才可能是巧合">再来一局</button>
+      <button id="homebtn" class="ghost">返回主页</button>
+    </div>
+  </div>
+</section>
+
+</main>
+<dialog id="recordsdialog" aria-labelledby="recordstitle" aria-describedby="recordsnotice">
+  <div class="records-heading">
+    <h2 id="recordstitle" tabindex="-1" autofocus>本地战绩</h2>
+    <button id="recordsclose" class="ghost icon-button" aria-label="关闭本地战绩"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  </div>
+  <p id="recordsnotice" class="records-note">记录仅保存在本地，不会上传。清除浏览器数据或更换浏览器后无法找回。仅保存成功完成且中途未断线、未退出的对局。</p>
+  <div id="recordslistpanel">
+    <p id="recordsempty" class="cfg">还没有成功对频的记录。下次接上脑回路，这里替你记一笔。</p>
+    <ul id="recordslist"></ul>
+  </div>
+  <div id="recorddetailpanel" hidden>
+    <button id="recordbackbtn" class="ghost">返回列表</button>
+    <div id="recorddetailsummary"></div>
+    <div id="recorddetailrounds" aria-label="完整对局记录"></div>
+  </div>
+</dialog>
+<dialog id="votedialog" aria-labelledby="votetitle" aria-describedby="votehint">
+  <h2 id="votetitle" tabindex="-1" autofocus></h2>
+  <p class="votes" id="votehint"></p>
+  <div class="votes">大家的意见</div>
+  <div id="votestate" role="status" aria-live="polite"></div>
+  <div class="row">
+    <button id="votecancel" class="ghost">返回游戏</button>
+    <button id="voteconfirm" class="ok">投票</button>
+  </div>
+</dialog>
+<dialog id="leavedialog" aria-labelledby="leavetitle" aria-describedby="leavehint">
+  <h2 id="leavetitle" tabindex="-1" autofocus>解散房间？</h2>
+  <p class="votes" id="leavehint">你是房主，返回主页会直接解散房间，所有玩家都将返回主页。</p>
+  <div class="row">
+    <button id="leavecancel" class="ghost">留在房间</button>
+    <button id="leaveconfirm">解散并返回</button>
+  </div>
+</dialog>
+<div id="live" class="sr-only" role="status" aria-atomic="true"></div>
+<div id="toast" role="alert" hidden></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+
+// 注意：局域网走的是 http，属于非安全上下文，crypto.randomUUID 和 clipboard 都不可用
+function randomToken() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  return 'p-' + [...crypto.getRandomValues(new Uint8Array(16))]
+    .map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+const TOKEN = localStorage.getItem('swg-token') || (() => {
+  const t = randomToken();
+  localStorage.setItem('swg-token', t);
+  return t;
+})();
+
+let ws = null, view = null, lastRound = null, lastPhase = null, seenRound = null;
+let saidText = '', saidRound = 0, saidResult = 0, saidVotes = 0;
+let lobbyPlayerIds = new Set();
+let roundFrame = 0;
+let historyAnimation = null;
+let recordedGameId = null;
+const RECORDS_KEY = 'swg-records-v1';
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+// Safari 需要触摸监听才能及时显示 :active；passive 保留默认滚动。
+for (const target of document.querySelectorAll('button,#recordsdialog')) {
+  target.addEventListener('touchstart', () => {}, { passive: true });
+}
+
+// 把状态变化念给屏幕阅读器听，视觉上没有对应元素
+function announce(msg) {
+  if (!msg || msg === saidText) return;
+  saidText = msg;
+  $('live').textContent = msg;
+}
+
+/* ------------------------------ 连接 ------------------------------ */
+function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
+
+function open() {
+  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+  ws.onopen = () => { if (view) send({ t: 'join', room: view.code, name: $('name').value.trim(), token: TOKEN }); };
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.t === 'error') {
+      toast(m.msg);
+      if (m.msg === '房间不存在') { view = null; render(); }
+      return;
+    }
+    if (m.t === 'joined') { localStorage.setItem('swg-token', m.token); return; }
+    if (m.t === 'left') {
+      view = null;
+      render();
+      history.replaceState(null, '', '/');
+      if (m.dissolved) toast('房主已解散房间');
+      return;
+    }
+    if (m.t === 'state') { view = m.view; render(); }
+  };
+  ws.onclose = () => setTimeout(open, 1200);
+}
+open();
+
+/* ------------------------------ 渲染 ------------------------------ */
+function screen(name) {
+  for (const id of ['home', 'lobby', 'play', 'done']) $(id).hidden = (id !== name);
+  if (name !== 'play') {
+    stopRoundMotion();
+    $('roundresults').replaceChildren();
+    lastRound = seenRound = null;
+  }
+  if (name !== 'lobby') lobbyPlayerIds.clear();
+  if (name !== 'done') { stopHistoryMotion(); stopBurst(); }
+}
+
+function stopHistoryMotion() {
+  historyAnimation?.cancel();
+  historyAnimation = null;
+  $('donehistory').classList.remove('closing');
+  $('donehistory').open = false;
+}
+
+function toggleDoneHistory() {
+  const details = $('donehistory'), body = $('donehistorybody');
+  const expanding = !details.open || details.classList.contains('closing');
+  const fromHeight = details.open ? body.getBoundingClientRect().height : 0;
+  const fromOpacity = details.open ? getComputedStyle(body).opacity : '0';
+  historyAnimation?.cancel();
+  historyAnimation = null;
+  details.classList.toggle('closing', !expanding);
+  details.open = true;
+  if (reduceMotion.matches || !body.animate) {
+    details.open = expanding;
+    details.classList.remove('closing');
+    return;
+  }
+  const animation = body.animate([
+    { height: fromHeight + 'px', opacity: fromOpacity },
+    { height: (expanding ? body.scrollHeight : 0) + 'px', opacity: expanding ? 1 : 0 },
+  ], { duration: 200, easing: 'ease', fill: 'both' });
+  historyAnimation = animation;
+  animation.onfinish = () => {
+    if (historyAnimation !== animation) return;
+    details.open = expanding;
+    animation.cancel();
+    historyAnimation = null;
+    details.classList.remove('closing');
+  };
+}
+
+const PLAYER_COLORS = [
+  ['#eee8fc', '#6041ad'], ['#e0f6fa', '#176b78'],
+  ['#fcebdc', '#8c4b23'], ['#e3edff', '#345b9e'],
+  ['#f9e5f0', '#91446e'], ['#fbf2cf', '#766016'],
+  ['#e0f2e9', '#2c7055'], ['#e9e8fa', '#55549a'],
+];
+function playerStyle(id, players = view?.players || []) {
+  const index = players.findIndex((p) => p.id === id);
+  const [bg, fg] = PLAYER_COLORS[(players[index]?.colorIndex ?? Math.max(0, index)) % PLAYER_COLORS.length];
+  return `--player-bg:${bg};--player-fg:${fg}`;
+}
+
+function roundCard(r, featured = false, players = view?.players || []) {
+  const words = r.items.map((i) =>
+    `<div class="result-player" style="${playerStyle(i.id, players)}"><span class="${r.items.length === 2 && !featured ? 'sr-only' : 'player-name'}">${esc(i.name)}</span><span class="answer">${i.word ? esc(i.word) : '未提交'}</span></div>`
+  ).join('');
+  return `<div class="rnd${featured ? ' success-round' + (r.items.length > 2 ? ' many' : '') : ''}">
+    <div class="rndhead">第 ${r.round} 轮${featured ? ' · 同频完成' : ''}</div>
+    <div class="rndwords" role="region" aria-label="第 ${r.round} 轮玩家答案${featured ? '' : '，可左右滚动'}" tabindex="0">${words}</div>
+  </div>`;
+}
+
+/* ------------------------------ 本地战绩 ------------------------------ */
+function readLocalRecords() {
+  try {
+    const records = JSON.parse(localStorage.getItem(RECORDS_KEY) || '[]');
+    const person = (p) => p && typeof p.id === 'string' && typeof p.name === 'string';
+    const valid = Array.isArray(records) && records.every((r) => r && typeof r.id === 'string'
+      && Number.isFinite(r.completedAt) && Number.isFinite(new Date(r.completedAt).getTime())
+      && ['match', 'accepted'].includes(r.endedBy)
+      && Array.isArray(r.players) && r.players.length >= 2 && r.players.every((p) => person(p)
+        && (p.colorIndex === undefined || (Number.isInteger(p.colorIndex) && p.colorIndex >= 0 && p.colorIndex < PLAYER_COLORS.length)))
+      && Array.isArray(r.history) && r.history.length > 0 && r.history.every((round) => round
+        && Number.isInteger(round.round) && round.round > 0 && Array.isArray(round.items) && round.items.length >= 2
+        && round.items.every((item) => person(item) && (item.word === null || typeof item.word === 'string'))));
+    return valid ? records.sort((a, b) => b.completedAt - a.completedAt) : null;
+  } catch { return null; }
+}
+
+function saveSuccessfulGame(v) {
+  if (v.phase !== 'done' || !['match', 'accepted'].includes(v.endedBy) || v.interrupted !== false
+      || typeof v.gameId !== 'string' || !Number.isFinite(v.completedAt) || !v.history.length
+      || v.gameId === recordedGameId) return;
+  recordedGameId = v.gameId;
+  const records = readLocalRecords();
+  if (!records) { toast('本地战绩暂时无法读取，本局未保存。'); return; }
+  if (records.some((r) => r.id === v.gameId)) return;
+  const participants = v.history.at(-1).items;
+  if (participants.length < 2) return;
+  const ids = new Map(participants.map((p, i) => [p.id, `p${i}`]));
+  const record = {
+    id: v.gameId, completedAt: v.completedAt, endedBy: v.endedBy,
+    players: participants.map((p) => ({ id: ids.get(p.id), name: p.name, colorIndex: Math.max(0, v.players.findIndex((player) => player.id === p.id)) % PLAYER_COLORS.length })),
+    history: v.history.map((r) => ({ round: r.round, matched: r.matched, items: r.items.map((p) => ({ id: ids.get(p.id), name: p.name, word: p.word })) })),
+  };
+  try { localStorage.setItem(RECORDS_KEY, JSON.stringify([record, ...records])); }
+  catch { toast('本地存储空间不足或不可用，本局战绩未保存。'); }
+}
+
+function recordSummary(record) {
+  const date = new Date(record.completedAt);
+  const time = date.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+  const answers = record.history.at(-1).items.map((p) => `<span class="result-player" style="${playerStyle(p.id, record.players)}"><span class="player-name">${esc(p.name)}</span><span class="answer">${esc(p.word || '未提交')}</span></span>`).join('');
+  return `<span class="record-meta"><time datetime="${date.toISOString()}">${esc(time)}</time><span>共 ${record.history.length} 轮</span></span>
+    <span class="rndwords record-answers">${answers}</span>`;
+}
+
+function renderLocalRecords() {
+  const records = readLocalRecords();
+  $('recordstitle').textContent = '本地战绩';
+  $('recordsnotice').hidden = false;
+  $('recordslistpanel').hidden = false;
+  $('recorddetailpanel').hidden = true;
+  $('recordsempty').hidden = !!records?.length;
+  $('recordsempty').textContent = records ? '还没有成功对频的记录。下次接上脑回路，这里替你记一笔。' : '本地战绩暂时无法读取，请检查浏览器的存储权限。';
+  $('recordslist').innerHTML = (records || []).map((r) => `<li><button class="ghost record-entry" data-record-id="${esc(r.id)}">${recordSummary(r)}</button></li>`).join('');
+  $('recordsdialog').scrollTop = 0;
+}
+
+function showLocalRecord(id) {
+  const record = readLocalRecords()?.find((r) => r.id === id);
+  if (!record) { toast('这条本地战绩暂时无法读取。'); return; }
+  $('recordstitle').textContent = '对局回看';
+  $('recordsnotice').hidden = true;
+  $('recordslistpanel').hidden = true;
+  $('recorddetailpanel').hidden = false;
+  $('recorddetailsummary').innerHTML = recordSummary(record);
+  $('recorddetailrounds').innerHTML = record.history.map((r) => roundCard(r, false, record.players)).join('');
+  $('recordsdialog').scrollTop = 0;
+  $('recordstitle').focus({ preventScroll: true });
+}
+
+function stopRoundMotion() {
+  cancelAnimationFrame(roundFrame);
+  roundFrame = 0;
+  $('roundresults').style.height = '';
+  for (const row of $('roundresults').querySelectorAll('.pending')) row.classList.remove('pending');
+}
+
+function showRoundResults(history) {
+  const results = $('roundresults'), last = history.at(-1);
+  if (!last) {
+    stopRoundMotion();
+    results.replaceChildren();
+    seenRound = null;
+    return;
+  }
+  if (last.round === seenRound) return;
+  stopRoundMotion();
+  if (seenRound === null) results.innerHTML = history.slice(0, -1).map((r) => roundCard(r)).join('');
+  const fromHeight = results.getBoundingClientRect().height, fromScroll = results.scrollTop;
+  const added = history.filter((r) => r.round > (seenRound ?? last.round - 1));
+  results.insertAdjacentHTML('beforeend', added.map((r) => roundCard(r)).join(''));
+  seenRound = last.round;
+  const rows = [...results.children].slice(-added.length);
+  for (const row of rows) row.classList.add('pending');
+  if (reduceMotion.matches) {
+    for (const row of rows) row.classList.remove('pending');
+    results.scrollTop = results.scrollHeight;
+    return;
+  }
+  const toHeight = results.getBoundingClientRect().height;
+  const toScroll = Math.max(0, results.scrollHeight - toHeight);
+  results.style.height = fromHeight + 'px';
+  let started;
+  // 先扩高或滚动腾出位置，再让新增结果出现。
+  function reserveSpace(now) {
+    started ??= now;
+    const progress = Math.min(1, (now - started) / 180), eased = 1 - (1 - progress) ** 3;
+    results.style.height = fromHeight + (toHeight - fromHeight) * eased + 'px';
+    results.scrollTop = fromScroll + (toScroll - fromScroll) * eased;
+    if (progress < 1 && !reduceMotion.matches) {
+      roundFrame = requestAnimationFrame(reserveSpace);
+    } else {
+      roundFrame = 0;
+      results.style.height = '';
+      results.scrollTop = results.scrollHeight;
+      for (const row of rows) {
+        row.classList.remove('pending');
+        if (!reduceMotion.matches) row.classList.add('revealing');
+      }
+    }
+  }
+  roundFrame = requestAnimationFrame(reserveSpace);
+}
+
+function render() {
+  const enteredDone = view?.phase === 'done' && lastPhase !== 'done';
+  lastPhase = view?.phase ?? null;
+  if ($('leavedialog').open && view?.hostId !== TOKEN) $('leavedialog').close();
+  if ($('votedialog').open && (view?.phase !== 'play' || view.round !== Number($('votedialog').dataset.round))) {
+    $('votedialog').close();
+  }
+  if (!view) { screen('home'); return; }
+  const v = view;
+  const me = v.players.find((p) => p.id === TOKEN);
+
+  const bits = [];
+  if (v.phase === 'lobby') {
+    bits.push(`房间 ${v.code}，当前 ${v.players.length} 人`);
+  } else if (v.phase === 'play') {
+    const lr = v.history[v.history.length - 1];
+    if (lr && lr.round !== saidResult) {
+      bits.push(`第 ${lr.round} 轮结果，${lr.matched ? '所有人完全一致' : '不一致'}`);
+      saidResult = lr.round;
+    }
+    if (v.round !== saidRound) { bits.push(`第 ${v.round} 轮开始`); saidRound = v.round; }
+    const nv = v.players.filter((p) => p.vote).length;
+    if (nv > 0 && nv !== saidVotes) bits.push(`${nv} 人已认定这一轮`);
+    saidVotes = nv;
+  } else {
+    bits.push(`本局结束，共 ${v.history.length} 轮`);
+    saidRound = saidResult = saidVotes = 0;   // 再来一局要能重新播报
+  }
+  announce(bits.join('。'));
+
+  if (v.phase === 'lobby') {
+    screen('lobby');
+    $('lobbycode').textContent = v.code;
+    $('lobbylink').value = location.origin + '/r/' + v.code;
+    $('lobbycfg').textContent = `最多 ${v.config.max} 人 · ${v.config.timeout ? v.config.timeout + ' 秒' : '不限时'}`;
+    $('lobbyplayers').innerHTML = Array.from({ length: v.config.max }, (_, i) => {
+      const p = v.players[i];
+      return `<li${p && !lobbyPlayerIds.has(p.id) ? ' class="arriving"' : ''}>${i % 2 ? '<span class="seat-link" aria-hidden="true">×</span>' : ''}${p
+        ? `<div class="player-slot" style="${playerStyle(p.id)}"><span class="lobby-name" title="${esc(p.name)}">${esc(p.name)}${p.id === v.hostId ? '<span class="sr-only">，房主</span>' : ''}</span>${p.connected ? '' : '<em class="off">掉线</em>'}</div>${p.id === v.hostId ? '<span class="host-mark" aria-hidden="true">👑</span>' : ''}`
+        : '<span class="empty-slot" role="img" aria-label="空位，等待加入"></span>'}</li>`;
+    }).join('');
+    lobbyPlayerIds = new Set(v.players.map((p) => p.id));
+    $('lobbycount').textContent = `${v.players.length} / ${v.config.max}`;
+    const isHost = v.hostId === TOKEN;
+    $('startbtn').hidden = !isHost;
+    const connectedCount = v.players.filter((p) => p.connected).length;
+    $('startbtn').disabled = connectedCount < 2;
+    $('startbtn').textContent = connectedCount < 2 ? '一个人，暂时只能自我认同' : '开始对频';
+    $('waithost').hidden = isHost;
+    return;
+  }
+
+  if (v.phase === 'play') {
+    screen('play');
+    const last = v.history.length ? v.history[v.history.length - 1] : null;
+
+    $('roundno').textContent = `第 ${v.round} 轮`;
+
+    $('lastwrap').hidden = !last;
+    showRoundResults(v.history);
+    if (last) {
+      // 完全一致的那一轮服务器已经直接结束本局了，根本走不到这里
+      const canVote = !last.matched;
+      $('votebtn').hidden = !canVote;
+      $('votebtn').textContent = me?.vote ? '已同意，等其他人表态' : '这轮算同频？';
+      $('votebtn').classList.toggle('voted', !!me?.vote);
+      $('votetitle').textContent = `第 ${last.round} 轮，算同频？`;
+      const words = [...new Set(last.items.map((i) => i.word).filter(Boolean))];
+      const answers = words.length > 1 ? words.slice(0, -1).join('、') + '和' + words.at(-1) : words[0];
+      const prompt = words.length ? `${answers}，字不一样，意思一样？` : '这一轮算同频？';
+      $('votehint').textContent = `${prompt}全员同意，就算这轮同频。`;
+      $('voteconfirm').textContent = me?.vote ? '撤回' : '投票';
+      $('voteconfirm').disabled = false;
+      $('votestate').innerHTML = v.players
+        .map((p) => `<span class="vote-square${p.vote ? ' agree' : ''}" role="img" aria-label="${p.vote ? '同意' : '不同意'}"></span>`).join('');
+    }
+
+    $('submitted').innerHTML = v.players.map((p) =>
+      `<span class="dot${p.submitted ? ' on' : ''}" style="${playerStyle(p.id)}">${p.submitted ? '✓ ' : ''}${esc(p.name)}</span>`).join('');
+
+    const done = !!me?.submitted;
+    if (v.round !== lastRound) { $('word').value = ''; lastRound = v.round; }
+    $('word').disabled = done;
+    $('submitbtn').disabled = done;
+    $('wordhint').textContent = done ? '已交卷，等搭子' : '提交后不可修改';
+    $('wordhint').classList.toggle('submitted', done);
+    if (done) $('word').blur(); else setTimeout(() => {
+      if (!$('votedialog').open && !$('play').hidden) $('word').focus();
+    }, 60);
+    return;
+  }
+
+  screen('done');
+  saveSuccessfulGame(v);
+  const h = v.history;
+  const last = h.length ? h[h.length - 1] : null;
+  const byMatch = v.endedBy === 'match';
+  if (enteredDone) $('successresults').innerHTML = last ? roundCard(last, true) : '';
+  $('doneslogan').textContent = byMatch ? '脑回路，接上了。' : '系统没懂，你们懂了。';
+  $('donesub').textContent = byMatch ? '刚才这一秒，你们共用了一个脑子。' : '字没对上，意思到了。';
+  $('totalrounds').textContent = `本局共 ${h.length} 轮`;
+
+  const previous = h.slice(0, -1);
+  $('donehistory').hidden = previous.length === 0;
+  $('donehistorylabel').textContent = `回看调频现场（${previous.length} 轮）`;
+  if (enteredDone) $('donehistoryresults').innerHTML = previous.map((r) => roundCard(r)).join('');
+
+  const alive = v.players.filter((p) => p.connected);
+  const disconnected = v.players.length - alive.length;
+  $('restartbtn').textContent = me?.ready ? '取消准备' : '再来，刚才可能是巧合';
+  $('restartbtn').title = me?.ready ? '已就位，点击取消' : '再来，刚才可能是巧合';
+  $('restartbtn').classList.toggle('voted', !!me?.ready);
+  $('restartbtn').setAttribute('aria-pressed', String(!!me?.ready));
+  $('restartcount').textContent = alive.length < 2 ? '搭子还没回来，再等等。' : `已就位 ${alive.filter((p) => p.ready).length} / ${alive.length}${disconnected ? ` · ${disconnected} 人断线` : ''}`;
+  const roster = JSON.stringify(v.players.map((p) => p.id));
+  if ($('restartplayers').dataset.roster !== roster) {
+    $('restartplayers').innerHTML = v.players.map((p) =>
+      `<span class="ready-square" style="${playerStyle(p.id)}" role="img"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m2 2 20 20M2 8.8a16 16 0 0 1 3.8-2.4M10.7 5.1A16 16 0 0 1 22 8.8M5 12.6a11 11 0 0 1 3.1-2.3M14 9.7a11 11 0 0 1 5 2.9M8.5 16.5a5 5 0 0 1 7 0M12 20h.01"/></svg></span>`).join('');
+    $('restartplayers').dataset.roster = roster;
+  }
+  [...$('restartplayers').children].forEach((el, i) => {
+    const p = v.players[i], label = `${p.name}，${!p.connected ? '已断线' : p.ready ? '已就位' : '等待准备'}`;
+    el.classList.toggle('on', p.connected && !!p.ready);
+    el.classList.toggle('offline', !p.connected);
+    el.setAttribute('aria-label', label);
+    el.title = label;
+  });
+
+  if (enteredDone && !reduceMotion.matches) burst();
+}
+
+/* ------------------------------ 特效 ------------------------------ */
+const cv = $('fx'), ctx = cv.getContext('2d');
+let burstFrame = 0;
+function stopBurst() {
+  cancelAnimationFrame(burstFrame);
+  burstFrame = 0;
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  cv.hidden = true;
+}
+function burst() {
+  stopBurst();
+  cv.hidden = false;
+  cv.width = innerWidth; cv.height = innerHeight;
+  const cs = getComputedStyle(document.documentElement);
+  const colors = ['--fx-1', '--fx-2', '--fx-3', '--fx-4', '--fx-5'].map((k) => cs.getPropertyValue(k).trim());
+  const ps = Array.from({ length: 180 }, () => ({
+    x: innerWidth / 2, y: innerHeight * 0.42,
+    vx: (Math.random() - .5) * 26, vy: Math.random() * -20 - 5,
+    g: .55, s: Math.random() * 8 + 4, r: Math.random() * 6, vr: (Math.random() - .5) * .45,
+    c: colors[Math.floor(Math.random() * colors.length)],
+  }));
+  let t = 0;
+  (function loop() {
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    for (const p of ps) {
+      p.vy += p.g; p.x += p.vx; p.y += p.vy; p.r += p.vr;
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.r);
+      ctx.fillStyle = p.c; ctx.fillRect(-p.s / 2, -p.s / 2, p.s, p.s * .62); ctx.restore();
+    }
+    if (++t < 170) burstFrame = requestAnimationFrame(loop);
+    else stopBurst();
+  })();
+}
+
+let toastTimer;
+function toast(msg) {
+  const el = $('toast');
+  el.textContent = msg; el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, 2200);
+}
+
+/* ------------------------------ 交互 ------------------------------ */
+$('cfgmax').oninput = () => { $('cfgmaxvalue').textContent = $('cfgmax').value + ' 人'; };
+$('createbtn').onclick = () => send({
+  t: 'create',
+  token: TOKEN,
+  name: $('name').value.trim(),
+  config: { max: Number($('cfgmax').value), timeout: Number(document.querySelector('input[name="cfgtimeout"]:checked').value) },
+});
+$('joinbtn').onclick = doJoin;
+$('joincode').onkeydown = (e) => { if (e.key === 'Enter') doJoin(); };
+function doJoin() {
+  const room = $('joincode').value.trim().toUpperCase();
+  if (room.length < 4) return toast('请输入 4 位房间码');
+  send({ t: 'join', room, name: $('name').value.trim(), token: TOKEN });
+}
+$('copybtn').onclick = async () => {
+  const link = $('lobbylink').value;
+  if (navigator.clipboard?.writeText) {
+    try { await navigator.clipboard.writeText(link); return toast('链接已复制'); } catch {}
+  }
+  $('lobbylink').select();
+  if (document.execCommand('copy')) toast('链接已复制');
+  else toast('请手动复制');
+};
+// 手机上点一下也能直接选中，方便手动复制
+$('lobbylink').onclick = (e) => e.target.select();
+$('recordsbtn').onclick = () => { renderLocalRecords(); $('recordsdialog').showModal(); };
+$('recordsclose').onclick = () => $('recordsdialog').close();
+$('recordbackbtn').onclick = () => { renderLocalRecords(); $('recordstitle').focus({ preventScroll: true }); };
+$('recordslist').onclick = (e) => {
+  const button = e.target.closest('button[data-record-id]');
+  if (button) showLocalRecord(button.dataset.recordId);
+};
+$('donehistorylabel').onclick = (e) => { e.preventDefault(); toggleDoneHistory(); };
+$('startbtn').onclick = () => send({ t: 'start' });
+$('submitbtn').onclick = doSubmit;
+$('word').onkeydown = (e) => { if (e.key === 'Enter') doSubmit(); };
+function doSubmit() {
+  const w = $('word').value.trim();
+  if (!w) return toast('请输入一个词');
+  send({ t: 'submit', word: w });
+}
+$('votebtn').onclick = () => {
+  $('word').blur();
+  $('votedialog').dataset.round = view.round;
+  $('votedialog').showModal();
+};
+$('votecancel').onclick = () => $('votedialog').close();
+$('voteconfirm').onclick = () => {
+  if (!$('votedialog').open || view?.phase !== 'play' || view.round !== Number($('votedialog').dataset.round)) return;
+  $('voteconfirm').disabled = true;
+  send({ t: 'vote' });
+};
+$('restartbtn').onclick = () => send({ t: 'restart' });
+$('homebtn').onclick = $('lobbyhomebtn').onclick = () => {
+  if (view?.hostId === TOKEN) $('leavedialog').showModal();
+  else send({ t: 'leave' });
+};
+$('leavecancel').onclick = () => $('leavedialog').close();
+$('leaveconfirm').onclick = () => send({ t: 'leave' });
+
+/* 倒计时 */
+setInterval(() => {
+  const v = view;
+  if (!v || v.phase !== 'play' || !v.deadline) { $('barfill').style.width = '100%'; $('clock').textContent = ''; return; }
+  const left = Math.max(0, v.deadline - Date.now());
+  $('barfill').style.width = (left / (v.config.timeout * 1000) * 100) + '%';
+  $('clock').textContent = Math.ceil(left / 1000) + 's';
+}, 150);
+
+/* 主题 */
+const THEME_ORDER = ['auto', 'light', 'dark'];
+const THEME_LABEL = { auto: '◐', light: '☀', dark: '☾' };
+const THEME_NAME = { auto: '跟随系统', light: '亮色', dark: '暗色' };
+const prefersLight = matchMedia('(prefers-color-scheme: light)');
+let themeTransition = null;
+
+function applyTheme() {
+  const t = localStorage.getItem('swg-theme') || 'auto';
+  const on = t === 'auto' ? (prefersLight.matches ? 'light' : 'dark') : t;
+  document.documentElement.dataset.theme = on;
+  document.querySelector('meta[name="theme-color"]').setAttribute('content', getComputedStyle(document.documentElement).getPropertyValue('--glow').trim());
+  $('themebtn').textContent = THEME_LABEL[t];
+  $('themebtn').setAttribute('aria-label', `切换主题，当前${THEME_NAME[t]}`);
+}
+$('themebtn').onclick = async () => {
+  themeTransition?.skipTransition();
+  const cur = localStorage.getItem('swg-theme') || 'auto';
+  localStorage.setItem('swg-theme', THEME_ORDER[(THEME_ORDER.indexOf(cur) + 1) % THEME_ORDER.length]);
+  if (reduceMotion.matches || !document.startViewTransition) { applyTheme(); return; }
+  const rect = $('themebtn').getBoundingClientRect();
+  const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
+  const radius = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
+  const transition = document.startViewTransition(applyTheme);
+  themeTransition = transition;
+  try {
+    await transition.ready;
+    document.documentElement.animate({
+      clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`],
+    }, { duration: 480, easing: 'cubic-bezier(.2,.7,.2,1)', pseudoElement: '::view-transition-new(root)' });
+    await transition.finished;
+  } catch {
+    transition.skipTransition();
+    applyTheme();
+  } finally {
+    if (themeTransition === transition) themeTransition = null;
+  }
+};
+prefersLight.addEventListener('change', applyTheme);  // 跟随系统时，系统一变就跟着变
+applyTheme();
+
+/* 初始化 */
+$('name').value = localStorage.getItem('swg-name') || '';
+$('name').onchange = () => localStorage.setItem('swg-name', $('name').value.trim());
+const fromUrl = (location.pathname.match(/^\/r\/([A-Za-z0-9]+)/) || [])[1];
+if (fromUrl) $('joincode').value = fromUrl.toUpperCase();
+</script>
+</body>
+</html>
