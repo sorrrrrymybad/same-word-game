@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
+import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -8,6 +9,30 @@ import { WebSocketServer } from 'ws';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
+const STATS_FILE = process.env.STATS_FILE || join(ROOT, 'data/stats.json');
+let stats = { startedGames: 0, since: new Date().toISOString() };
+try {
+  const saved = JSON.parse(readFileSync(STATS_FILE, 'utf8'));
+  if (!saved || !Number.isSafeInteger(saved.startedGames) || saved.startedGames < 0
+      || typeof saved.since !== 'string' || !Number.isFinite(Date.parse(saved.since))) {
+    throw new Error('统计文件内容无效，请检查或恢复备份');
+  }
+  stats = { startedGames: saved.startedGames, since: saved.since };
+} catch (error) {
+  if (error.code !== 'ENOENT') throw error;
+  mkdirSync(dirname(STATS_FILE), { recursive: true });
+  writeFileSync(STATS_FILE, JSON.stringify(stats));
+}
+
+function recordGameStart() {
+  stats.startedGames += 1;
+  try {
+    writeFileSync(STATS_FILE + '.tmp', JSON.stringify(stats));
+    renameSync(STATS_FILE + '.tmp', STATS_FILE);
+  } catch (error) {
+    console.error('开局统计保存失败，当前进程仍继续计数，请检查统计目录：', error.message);
+  }
+}
 
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 去掉易混的 0 O 1 I
 const CODE_LEN = 4;
@@ -76,7 +101,6 @@ function view(room) {
     phase: room.phase,
     round: room.round,
     deadline: room.deadline,
-    used: [...room.used.values()],
     hostId: hostOf(room),
     endedBy: room.endedBy,
     gameId: room.gameId,
@@ -103,6 +127,7 @@ const push = (room) => { const v = view(room); for (const p of room.players.valu
 /* ------------------------------ 回合结算 ------------------------------ */
 
 function startRound(room) {
+  if (room.round === 0) recordGameStart();
   room.round += 1;
   room.phase = 'play';
   room.words.clear();
@@ -147,6 +172,14 @@ function completeRound(room) {
 
   // 不一致：进入下一轮，玩家可以在新输入页上投票认定（土豆 / 马铃薯 那种情况）
   startRound(room);
+}
+
+// 在线玩家都提交了就结算，提交和掉线两条路径共用
+function completeIfAllSubmitted(room) {
+  const alive = live(room);
+  if (alive.length < 2 || !alive.every((p) => room.words.has(p.token))) return false;
+  completeRound(room);
+  return true;
 }
 
 // 任何人改票后检查一次：所有在线玩家都认定 → 本局结束
@@ -240,7 +273,7 @@ function onMessage(conn, m) {
   if (m.t === 'leave') {
     conn.room = null;
     if (hostOf(room) === conn.token) {
-      resetGame(room);
+      clearTimeout(room.timer);
       rooms.delete(room.code);
       for (const p of room.players.values()) send(p.ws, { t: 'left', dissolved: true });
       room.players.clear();
@@ -270,9 +303,7 @@ function onMessage(conn, m) {
     if (!norm(raw)) return send(ws, { t: 'error', msg: '请输入一个词' });
     if (room.used.has(norm(raw))) return send(ws, { t: 'error', msg: `「${raw}」前面出现过了，换一个` });
     room.words.set(conn.token, raw);
-    const alive = live(room);
-    if (alive.length >= 2 && alive.every((p) => room.words.has(p.token))) completeRound(room);
-    else push(room);
+    if (!completeIfAllSubmitted(room)) push(room);
     return;
   }
 
@@ -305,12 +336,27 @@ const lanIPs = Object.values(networkInterfaces()).flat()
   .map((i) => i.address)
   .filter((ip) => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip)); // 只报内网地址
 
+function publicStats() {
+  const online = [...wss.clients].filter((ws) => ws.readyState === 1 && Date.now() - ws.lastSeenAt < 30_000).length;
+  return { online, startedGames: stats.startedGames };
+}
+
 const server = createServer(async (req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname;
-  if (path === '/favicon.png' || path === '/favicon.ico') {
+  if (path === '/api/stats') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    return res.end(JSON.stringify(publicStats()));
+  }
+  const assetTypes = {
+    '/favicon.png': 'image/png',
+    '/favicon.ico': 'image/x-icon',
+    '/assets/background.js': 'text/javascript; charset=utf-8',
+    '/assets/background.css': 'text/css; charset=utf-8',
+  };
+  if (Object.hasOwn(assetTypes, path)) {
     try {
       const icon = await readFile(join(ROOT, 'public', path.slice(1)));
-      res.writeHead(200, { 'content-type': path.endsWith('.png') ? 'image/png' : 'image/x-icon' });
+      res.writeHead(200, { 'content-type': assetTypes[path] });
       return res.end(icon);
     } catch {
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
@@ -330,13 +376,15 @@ const server = createServer(async (req, res) => {
 const wss = new WebSocketServer({ server });
 
 wss.on('connection', (ws) => {
+  ws.lastSeenAt = Date.now();
   const conn = { ws, room: null, token: null };
 
   ws.on('message', (raw) => {
+    ws.lastSeenAt = Date.now();
     let m;
     try { m = JSON.parse(raw); } catch { return; }
     if (m?.t === 'ping') {
-      if (typeof m.id === 'number' && Number.isFinite(m.id)) send(ws, { t: 'pong', id: m.id });
+      if (typeof m.id === 'number' && Number.isFinite(m.id)) send(ws, { t: 'pong', id: m.id, stats: publicStats() });
       return;
     }
     if (m.t === 'join') {
@@ -361,9 +409,8 @@ wss.on('connection', (ws) => {
     if (room.phase === 'done' && restartIfReady(room)) return;
     push(room);
     if (room.phase !== 'play') return;
-    const alive = live(room);
-    if (alive.length >= 2 && alive.every((p) => room.words.has(p.token))) completeRound(room);
-    else settle(room) && push(room);
+    if (completeIfAllSubmitted(room)) return;
+    if (settle(room)) push(room);
   });
 });
 

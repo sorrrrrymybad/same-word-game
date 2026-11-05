@@ -5,9 +5,15 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "test": "node test.js"
+    "test": "node test.js",
+    "build": "esbuild src/background.jsx --bundle --minify --jsx=automatic --legal-comments=eof --outfile=public/assets/background.js"
   },
   "dependencies": {
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   }
 }
