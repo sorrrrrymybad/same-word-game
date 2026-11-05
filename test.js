@@ -45,6 +45,14 @@ function client() {
 const A = client(), B = client();
 await A.ready; await B.ready;
 
+/* ---------- 心跳无需加入房间，原样返回测量标识 ---------- */
+const pong = new Promise((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error('心跳响应超时')), 1500);
+  A.ws.once('message', (raw) => { clearTimeout(timer); resolve(JSON.parse(raw)); });
+});
+A.send({ t: 'ping', id: 123.5 });
+assert.deepEqual(await pong, { t: 'pong', id: 123.5 });
+
 /* ---------- 建房与加入 ---------- */
 A.send({ t: 'create', token: 'tokA', name: '甲', config: { max: 2, timeout: 0 } });
 await A.until((v) => v.phase === 'lobby');
@@ -222,7 +230,7 @@ await D.until((v) => !v.players.find((p) => p.id === 'tokE').connected);
 assert.equal(D.view.interrupted, true, '中途断线应标记本局不可留存');
 const E3 = client();
 await E3.ready;
-E3.send({ t: 'join', room: anotherCode, token: 'tokE' });
+E3.send({ t: 'join', room: anotherCode, token: 'tokE', resume: true });
 await E3.until((v) => v.players.find((p) => p.id === 'tokE').connected);
 for (const c of [D, E3]) c.send({ t: 'submit', word: '太阳' });
 await D.until((v) => v.phase === 'done');
@@ -256,6 +264,56 @@ assert.equal(reconnectGuest.view.players.find((p) => p.id === 'nickname-0').name
 nicknameHost.send({ t: 'leave' });
 await reconnectGuest.left;
 
+/* ---------- 关闭网页后恢复房主与玩家，失效连接不能自动成为新玩家 ---------- */
+const absentHost = client(), absentGuest = client();
+await Promise.all([absentHost.ready, absentGuest.ready]);
+absentHost.send({ t: 'create', token: 'absent-host', name: '原房主', config: { max: 2 } });
+await absentHost.until((v) => v.phase === 'lobby');
+const savedCode = absentHost.view.code, savedGameId = absentHost.view.gameId;
+absentGuest.send({ t: 'join', room: savedCode, token: 'absent-guest', name: '原玩家' });
+await absentHost.until((v) => v.players.length === 2);
+await Promise.all([absentHost, absentGuest].map((c) => new Promise((resolve) => { c.ws.once('close', resolve); c.ws.close(); })));
+const restoredHost = client(), restoredGuest = client();
+await Promise.all([restoredHost.ready, restoredGuest.ready]);
+restoredHost.send({ t: 'join', room: savedCode, token: 'absent-host', resume: true });
+restoredGuest.send({ t: 'join', room: savedCode, token: 'absent-guest', resume: true });
+await restoredHost.until((v) => v.players.every((p) => p.connected));
+assert.equal(restoredHost.view.gameId, savedGameId);
+assert.equal(restoredHost.view.hostId, 'absent-host');
+assert.deepEqual(restoredHost.view.players.map((p) => p.name), ['原房主', '原玩家']);
+restoredGuest.send({ t: 'leave' });
+await restoredGuest.left;
+restoredGuest.send({ t: 'join', room: savedCode, token: 'absent-guest', resume: true });
+assert.match(await restoredGuest.untilError(), /连接已失效/);
+restoredHost.send({ t: 'leave' });
+await restoredHost.left;
+restoredGuest.send({ t: 'join', room: savedCode, token: 'absent-guest', resume: true });
+assert.match(await restoredGuest.untilError(), /房间不存在/);
+
+/* ---------- 游戏中退出：玩家离开让所有其他人回等待页，房主离开解散 ---------- */
+const exitHost = client(), exitGuest = client(), remainingGuest = client();
+await Promise.all([exitHost.ready, exitGuest.ready, remainingGuest.ready]);
+exitHost.send({ t: 'create', token: 'exit-host', config: { max: 3 } });
+await exitHost.until((v) => v.phase === 'lobby');
+const exitCode = exitHost.view.code;
+exitGuest.send({ t: 'join', room: exitCode, token: 'exit-guest' });
+remainingGuest.send({ t: 'join', room: exitCode, token: 'remaining-guest' });
+await exitHost.until((v) => v.players.length === 3);
+exitHost.send({ t: 'start' });
+await exitHost.until((v) => v.phase === 'play');
+exitHost.send({ t: 'submit', word: '月亮' });
+await exitHost.until((v) => v.players[0].submitted);
+exitGuest.send({ t: 'leave' });
+await exitGuest.left;
+await Promise.all([exitHost, remainingGuest].map((c) => c.until((v) => v.phase === 'lobby' && v.players.length === 2)));
+assert.equal(remainingGuest.view.round, 0);
+assert.ok(remainingGuest.view.players.every((p) => !p.submitted && !p.ready));
+exitHost.send({ t: 'start' });
+await remainingGuest.until((v) => v.phase === 'play');
+exitHost.send({ t: 'leave' });
+assert.equal((await exitHost.left).dissolved, true);
+assert.equal((await remainingGuest.left).dissolved, true);
+
 /* ---------- 客户端回归守卫 ---------- */
 // 局域网走 http，是非安全上下文，crypto.randomUUID 与 clipboard 都不存在。
 const page = await (await fetch(`http://127.0.0.1:${PORT}/`)).text();
@@ -279,10 +337,119 @@ assert.ok(!/cfgtopic|"topic"|v\.topic/.test(page), '话题相关代码应已删�
 assert.ok(/endedBy/.test(page), '客户端应区分「服务器判定」和「玩家认定」两种结束方式');
 assert.ok(/系统没懂，你们懂了。/.test(page), '投票认定结束时应显示另一套文案');
 
+/* ---------- 不带房间码重新打开时自动恢复，主动退出及失效后清除 ---------- */
+const connectionStorage = new Map();
+function loadConnection(fromUrl = undefined) {
+  const c = {
+    ws: null, view: null, fromUrl, TOKEN: 'saved-token', messages: [], notices: [], renders: 0,
+    connectionOnline: false, roomSynced: false, latency: null,
+    heartbeatTimer: null, heartbeatTimeout: null, heartbeatSentAt: null,
+    now: 100, timers: new Map(), heartbeats: [],
+    performance: { now: () => c.now },
+    $: (id) => {
+      if (!c.elements.has(id)) c.elements.set(id, { dataset: {}, setAttribute(key, value) { this[key] = value; } });
+      return c.elements.get(id);
+    },
+    elements: new Map(),
+    location: { protocol: 'http:', host: 'localhost' },
+    history: { replaceState() {} },
+    localStorage: {
+      getItem: (key) => connectionStorage.get(key) ?? null,
+      setItem: (key, value) => connectionStorage.set(key, value),
+      removeItem: (key) => connectionStorage.delete(key),
+    },
+    WebSocket: class {
+      readyState = 1;
+      send(raw) { const m = JSON.parse(raw); (m.t === 'ping' ? c.heartbeats : c.messages).push(m); }
+      close() { this.readyState = 3; }
+    },
+    render() { c.renders++; }, toast(msg) { c.notices.push(msg); },
+    setTimeout(fn, delay) { const id = ++c.timerId; c.timers.set(id, fn); if (delay === 1200) c.retry = fn; return id; },
+    clearTimeout(id) { c.timers.delete(id); },
+    timerId: 0,
+  };
+  vm.createContext(c);
+  vm.runInContext(page.slice(page.indexOf('function send(o)'), page.indexOf('\nopen();')), c);
+  c.open();
+  c.ws.onopen();
+  c.receive = (m) => c.ws.onmessage({ data: JSON.stringify(m) });
+  c.receive({ t: 'pong', id: c.heartbeats.at(-1).id });
+  return c;
+}
+let connection = loadConnection();
+assert.equal(connection.messages.length, 0, '首次访问主页不能自动加入房间');
+connection.receive({ t: 'state', view: { code: 'ABCD' } });
+assert.equal(connectionStorage.get('swg-room'), 'ABCD', '建房或加入成功后记住房间');
+connection = loadConnection();
+assert.deepEqual(connection.messages[0], { t: 'join', room: 'ABCD', token: 'saved-token', resume: true });
+connection.receive({ t: 'state', view: { code: 'ABCD' } });
+connection.ws.onclose();
+connection.retry();
+connection.ws.onopen();
+assert.equal(connection.messages.at(-1).room, 'ABCD', '网络断线后仍恢复当前房间');
+assert.equal(loadConnection('WXYZ').messages.length, 0, '其他邀请优先，不能自动回到旧房间');
+assert.equal(loadConnection('ABCD').messages[0].room, 'ABCD', '同一房间的邀请可以恢复');
+connection.receive({ t: 'left' });
+assert.equal(connectionStorage.has('swg-room'), false);
+assert.equal(loadConnection().messages.length, 0, '主动退出或解散后不再恢复');
+for (const msg of ['房间不存在', '连接已失效，请重新加入房间']) {
+  connectionStorage.set('swg-room', 'ABCD');
+  connection = loadConnection();
+  connection.receive({ t: 'error', msg });
+  assert.equal(connectionStorage.has('swg-room'), false);
+  assert.equal(connection.view, null);
+  assert.equal(loadConnection().messages.length, 0, '失效的连接不应重复恢复');
+}
+connection = loadConnection();
+connection.localStorage.setItem = () => { throw new Error('quota'); };
+connection.receive({ t: 'state', view: { code: 'ABCD' } });
+assert.equal(connection.renders, 1, '保存失败不能阻止房间显示');
+assert.match(connection.notices[0], /无法保存房间连接/);
+
+/* ---------- 心跳测延迟，失效连接禁用提交，重连等房间同步 ---------- */
+connectionStorage.clear();
+connection = loadConnection();
+assert.equal(connection.$('connectionstatus').dataset.quality, 'good');
+assert.equal(connection.$('submitbtn').disabled, false);
+connection.view = { code: 'ABCD', players: [{ id: 'saved-token', submitted: false }] };
+connection.timers.get(connection.heartbeatTimer)();
+connection.now += 250;
+connection.receive({ t: 'pong', id: connection.heartbeats.at(-1).id });
+assert.equal(connection.latency, 250);
+assert.equal(connection.$('connectionstatus').dataset.quality, 'slow');
+connection.timers.get(connection.heartbeatTimer)();
+connection.now += 600;
+connection.receive({ t: 'pong', id: connection.heartbeats.at(-1).id });
+assert.equal(connection.$('connectionstatus').dataset.quality, 'poor');
+connection.timers.get(connection.heartbeatTimer)();
+const oldSocket = connection.ws;
+connection.timers.get(connection.heartbeatTimeout)();
+assert.equal(oldSocket.readyState, 3);
+assert.equal(connection.$('submitbtn').disabled, true);
+assert.equal(connection.$('submitbtn')['aria-busy'], 'true');
+assert.match(connection.$('connectionstatus').textContent, /重连中/);
+vm.runInContext(page.match(/function doSubmit\(\) \{[\s\S]*?\n\}/)[0], connection);
+connection.$('word').value = '月亮';
+const messagesBeforeOfflineSubmit = connection.messages.length;
+connection.doSubmit();
+assert.equal(connection.messages.length, messagesBeforeOfflineSubmit, '断线时回车也不能提交');
+assert.match(connection.notices.at(-1), /连接正在恢复/);
+oldSocket.onclose();
+connection.retry();
+connection.ws.onopen();
+connection.receive({ t: 'pong', id: connection.heartbeats.at(-1).id });
+assert.equal(connection.$('submitbtn').disabled, true, '恢复连接后还要等待房间状态');
+connection.receive({ t: 'state', view: { code: 'ABCD', players: [{ id: 'saved-token', submitted: true }] } });
+assert.equal(connection.$('submitbtn').disabled, true, '重连后已提交不能再次提交');
+assert.equal(connection.$('submitbtn')['aria-busy'], 'false');
+connection.receive({ t: 'state', view: { code: 'ABCD', players: [{ id: 'saved-token', submitted: false }] } });
+assert.equal(connection.$('submitbtn').disabled, false);
+
 /* ---------- 礼花只在进入结算时播放，准备及离线更新不重播 ---------- */
 const elements = new Map();
 let bursts = 0, stops = 0;
 const context = {
+  connectionOnline: true, roomSynced: true,
   view: { phase: 'done', code: 'ABCD', config: { max: 2, timeout: 0 }, round: 1, endedBy: 'match', history: [{ round: 1, items: [] }], players: [
     { id: 'me', name: '甲', connected: true, ready: false }, { id: 'other', name: '乙', connected: true, ready: false },
   ] },
@@ -296,7 +463,7 @@ const context = {
         classList: { toggle(c, on) { if (on) classes.add(c); else classes.delete(c); }, contains(c) { return classes.has(c); } },
         set innerHTML(html) { this.html = html; this.children = [...html.matchAll(/class="ready-square"/g)].map((_, i) => context.$(`${id}-${i}-${++elementVersion}`)); },
         get innerHTML() { return this.html || ''; },
-        setAttribute(name, value) { this[name] = value; }, blur() {}, replaceChildren() { this.children = []; }, close() { this.open = false; },
+        setAttribute(name, value) { this[name] = value; }, blur() {}, replaceChildren() { this.children = []; }, close() { this.open = false; }, showModal() { this.open = true; },
       });
     }
     return elements.get(id);
@@ -306,8 +473,9 @@ const context = {
 };
 let elementVersion = 0;
 vm.createContext(context);
-vm.runInContext(page.match(/function screen\(name\) \{[\s\S]*?\n\}/)[0] + '\n' + page.match(/function render\(\) \{[\s\S]*?\n\}/)[0], context);
+vm.runInContext(page.match(/function updateSubmitButton\(\) \{[\s\S]*?\n\}/)[0] + '\n' + page.match(/function screen\(name\) \{[\s\S]*?\n\}/)[0] + '\n' + page.match(/function render\(\) \{[\s\S]*?\n\}/)[0], context);
 context.render();
+assert.equal(elements.get('roomexitbtn').hidden, true, '结算页隐藏顶部退出入口');
 const readySquare = elements.get('restartplayers').children[0];
 const otherSquare = elements.get('restartplayers').children[1];
 context.view.players[0].ready = true;
@@ -342,6 +510,7 @@ context.render();
 assert.equal(otherSquare.classList.contains('on'), false, '断线图标优先于旧的准备状态');
 context.view.phase = 'lobby';
 context.render();
+assert.equal(elements.get('roomexitbtn').hidden, true, '等待页隐藏顶部退出入口');
 assert.equal(stops, 1, '回到等待页应停止上一局礼花');
 assert.equal(elements.get('startbtn').disabled, true);
 assert.equal((elements.get('lobbyplayers').innerHTML.match(/class="arriving"/g) || []).length, 2);
@@ -360,11 +529,40 @@ context.view = null;
 elements.get('leavedialog').open = true;
 context.render();
 assert.equal(elements.get('leavedialog').open, false);
+assert.equal(elements.get('roomexitbtn').hidden, true, '首页隐藏顶部退出入口');
 assert.equal(stops, 4, '返回主页应停止礼花');
+
+/* ---------- 所有退出入口共用二次确认，普通玩家的确认不被状态更新关闭 ---------- */
+const leaveMessages = [];
+context.send = (m) => leaveMessages.push(m);
+vm.runInContext(page.slice(page.indexOf("$('homebtn').onclick"), page.indexOf('/* 倒计时 */')), context);
+for (const isHost of [true, false]) {
+  context.view = { phase: 'lobby', hostId: isHost ? 'me' : 'other', code: 'ABCD', config: { max: 2 }, players: [] };
+  for (const id of ['roomexitbtn', 'lobbyhomebtn', 'homebtn']) {
+    context.$(id).onclick();
+    assert.equal(elements.get('leavedialog').open, true);
+    assert.equal(elements.get('leavetitle').textContent, isHost ? '解散房间？' : '退出房间？');
+    assert.match(elements.get('leavehint').textContent, isHost ? /退出会解散房间/ : /当前对局进度将清空/);
+    assert.equal(leaveMessages.length, 0, '打开确认框不能直接退出');
+    context.render();
+    assert.equal(elements.get('leavedialog').open, true, '房间更新不能关闭退出确认');
+    context.$('leavecancel').onclick();
+    assert.equal(elements.get('leavedialog').open, false);
+    assert.equal(leaveMessages.length, 0, '取消后仍留在房间');
+  }
+  context.$('roomexitbtn').onclick();
+  context.$('leaveconfirm').onclick();
+  assert.equal(leaveMessages.pop().t, 'leave', '确认后才发送退出请求');
+  context.$('leavecancel').onclick();
+}
+context.view = null;
+context.$('roomexitbtn').onclick();
+assert.equal(elements.get('leavedialog').open, false, '首页不能打开退出确认');
 
 /* ---------- 交卷提示原位切换，保留已提交的词 ---------- */
 context.view = { phase: 'play', code: 'ABCD', round: 2, history: [], players: [{ id: 'me', name: '甲', submitted: false }] };
 context.render();
+assert.equal(elements.get('roomexitbtn').hidden, false, '游戏中显示顶部退出入口');
 assert.equal(elements.get('wordhint').textContent, '提交后不可修改');
 elements.get('word').value = '月亮';
 context.view.players[0].submitted = true;
@@ -593,6 +791,7 @@ for (const theme of ['dark', 'light']) {
     ['on-accent', 'accent-solid', 4.5], ['ok-ink', 'ok', 4.5],
     ['ok', 'card', 4.5], ['ok', 'card2', 4.5],
     ['warn', 'card', 4.5], ['warn', 'card2', 4.5],
+    ['latency-slow', 'card', 4.5],
     ['accent', 'card2', 4.5], ['accent', 'card', 3],
     ['field-line', 'card2', 3], ['field-line', 'card', 3],
     ['line-strong', 'card', 1.5],

@@ -335,9 +335,14 @@ wss.on('connection', (ws) => {
   ws.on('message', (raw) => {
     let m;
     try { m = JSON.parse(raw); } catch { return; }
+    if (m?.t === 'ping') {
+      if (typeof m.id === 'number' && Number.isFinite(m.id)) send(ws, { t: 'pong', id: m.id });
+      return;
+    }
     if (m.t === 'join') {
       const room = rooms.get(String(m.room || '').toUpperCase());
       if (!room) return send(ws, { t: 'error', msg: '房间不存在' });
+      if (m.resume && !room.players.has(m.token)) return send(ws, { t: 'error', msg: '连接已失效，请重新加入房间' });
       return joinRoom(conn, room, m.name, m.token || randomUUID());
     }
     onMessage(conn, m);

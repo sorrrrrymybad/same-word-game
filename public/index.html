@@ -16,7 +16,8 @@
 })();
 </script>
 <style>
-*{box-sizing:border-box}
+*{box-sizing:border-box;scrollbar-width:none}
+*::-webkit-scrollbar{display:none}
 /* 对比度都过了 WCAG AA，测试里有守卫盯着，改配色前先看 test.js */
 :root[data-theme="dark"]{
   color-scheme:dark;
@@ -25,7 +26,7 @@
   --fg:#e9ecf5;--dim:#9aa2b6;
   --accent:#9b80ff;--accent-solid:#6a45ff;--on-accent:#ffffff;
   --accent-soft:rgba(155,128,255,.16);--accent-text:#b6a3ff;
-  --ok:#43d19e;--ok-ink:#06251a;--warn:#ff7b7b;
+  --ok:#43d19e;--ok-ink:#06251a;--warn:#ff7b7b;--latency-slow:#ffd166;
   --ok-soft:rgba(67,209,158,.14);--ok-line:rgba(67,209,158,.42);
   --warn-soft:rgba(255,123,123,.12);
   --glow:#1d2440;--focus:#9b80ff;
@@ -41,7 +42,7 @@
   --fg:#171a24;--dim:#5c6474;
   --accent:#6a45ff;--accent-solid:#6a45ff;--on-accent:#ffffff;
   --accent-soft:rgba(106,69,255,.10);--accent-text:#5a37d6;
-  --ok:#0a7a55;--ok-ink:#ffffff;--warn:#c4332d;
+  --ok:#0a7a55;--ok-ink:#ffffff;--warn:#c4332d;--latency-slow:#866000;
   --ok-soft:rgba(10,122,85,.10);--ok-line:rgba(10,122,85,.4);
   --warn-soft:rgba(196,51,45,.08);
   --glow:#e3e9ff;--focus:#6a45ff;
@@ -56,21 +57,39 @@ body{
   margin:0;min-height:100dvh;display:flex;align-items:center;justify-content:center;
   padding:calc(24px + env(safe-area-inset-top,0px)) calc(24px + env(safe-area-inset-right,0px))
           calc(24px + env(safe-area-inset-bottom,0px)) calc(24px + env(safe-area-inset-left,0px));
+  padding-top:calc(68px + env(safe-area-inset-top,0px));
   background-color:var(--glow);color:var(--fg);
   font:15px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
   -webkit-font-smoothing:antialiased;
 }
 #fx{position:fixed;inset:0;pointer-events:none;z-index:99}
-#themebtn{
-  position:fixed;z-index:110;display:inline-flex;align-items:center;justify-content:center;
-  top:calc(8px + env(safe-area-inset-top,0px));
-  right:calc(18px + env(safe-area-inset-right,0px));
+#topactions{
+  position:fixed;z-index:110;top:calc(8px + env(safe-area-inset-top,0px));
+  right:calc(18px + env(safe-area-inset-right,0px));display:flex;align-items:center;gap:10px;
+}
+#connectionstatus{
+  height:44px;
+  display:flex;align-items:center;gap:6px;padding:0 12px;border-radius:22px;
+  background:var(--card);border:1px solid var(--line-strong);font-size:12px;
+  color:var(--warn);font-variant-numeric:tabular-nums;white-space:nowrap;
+}
+#connectionstatus::before{content:'';width:6px;height:6px;border-radius:50%;background:currentColor}
+#connectionstatus[data-quality="good"]{color:var(--ok)}
+#connectionstatus[data-quality="slow"]{color:var(--latency-slow)}
+#submitbtn{min-width:88px}
+#submitbtn[aria-busy="true"]::before{
+  content:'';display:inline-block;width:12px;height:12px;margin-right:6px;vertical-align:-1px;
+  border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:connecting .8s linear infinite;
+}
+@keyframes connecting{to{transform:rotate(360deg)}}
+#themebtn,#roomexitbtn{
+  display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;
   width:44px;height:44px;padding:0;border-radius:50%;
   background:var(--card);border:1px solid var(--line-strong);color:var(--dim);
   font-size:18px;line-height:1;letter-spacing:0;box-shadow:var(--shadow);
 }
 @media (hover:hover) and (pointer:fine){
-  #themebtn:hover:not(:active){filter:none;color:var(--fg);border-color:var(--accent)}
+  #themebtn:hover:not(:active),#roomexitbtn:hover:not(:active){filter:none;color:var(--fg);border-color:var(--accent)}
 }
 ::view-transition{pointer-events:none}
 ::view-transition-old(root),::view-transition-new(root){animation:none;mix-blend-mode:normal}
@@ -265,7 +284,11 @@ summary:hover{color:var(--fg)}
 </head>
 <body>
 <canvas id="fx" aria-hidden="true" hidden></canvas>
-<button id="themebtn" title="切换主题"></button>
+<div id="topactions">
+  <div id="connectionstatus" role="status" aria-atomic="true" data-quality="offline">连接中 · -- ms</div>
+  <button id="roomexitbtn" class="icon-button" aria-label="退出房间" title="退出房间" hidden><svg viewBox="0 0 1024 1024" fill="currentColor" aria-hidden="true"><path d="M662.016 247.6544a32 32 0 1 1 29.4912-56.832 390.4 390.4 0 1 1-359.0144 0 32 32 0 1 1 29.4912 56.832 326.4 326.4 0 1 0 300.032 0zM544 384a32 32 0 1 1-64 0v-256a32 32 0 1 1 64 0v256z"/></svg></button>
+  <button id="themebtn" title="切换主题"></button>
+</div>
 <main>
 
 <section id="home">
@@ -409,7 +432,7 @@ summary:hover{color:var(--fg)}
 </dialog>
 <dialog id="leavedialog" aria-labelledby="leavetitle" aria-describedby="leavehint">
   <h2 id="leavetitle" tabindex="-1" autofocus>解散房间？</h2>
-  <p class="votes" id="leavehint">你是房主，返回主页会直接解散房间，所有玩家都将返回主页。</p>
+  <p class="votes" id="leavehint">你是房主，返回主页会直接解散房间。</p>
   <div class="row">
     <button id="leavecancel" class="ghost">留在房间</button>
     <button id="leaveconfirm">解散并返回</button>
@@ -456,29 +479,110 @@ function announce(msg) {
 }
 
 /* ------------------------------ 连接 ------------------------------ */
-function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
+let connectionOnline = false, roomSynced = false, latency = null;
+let heartbeatTimer = null, heartbeatTimeout = null, heartbeatSentAt = null;
+
+function send(o) {
+  if (ws && ws.readyState === 1) { ws.send(JSON.stringify(o)); return true; }
+  toast('连接正在恢复，请稍后再试');
+  return false;
+}
+
+function updateSubmitButton() {
+  const waiting = !connectionOnline || !roomSynced;
+  $('submitbtn').disabled = waiting || !!view?.players?.find((p) => p.id === TOKEN)?.submitted;
+  $('submitbtn').setAttribute('aria-busy', String(waiting));
+  $('submitbtn').textContent = waiting ? (connectionOnline ? '同步中' : '重连中') : '提交';
+}
+
+function renderConnection() {
+  const quality = !connectionOnline ? 'offline' : latency < 200 ? 'good' : latency < 500 ? 'slow' : 'poor';
+  $('connectionstatus').dataset.quality = quality;
+  $('connectionstatus').textContent = connectionOnline
+    ? `${roomSynced ? '在线' : '同步中'} · ${latency} ms`
+    : '重连中 · -- ms';
+  updateSubmitButton();
+}
 
 function open() {
-  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
-  ws.onopen = () => { if (view) send({ t: 'join', room: view.code, name: $('name').value.trim(), token: TOKEN }); };
-  ws.onmessage = (e) => {
+  const socket = ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+  connectionOnline = false;
+  roomSynced = false;
+  renderConnection();
+  function reconnect() {
+    if (ws !== socket) return;
+    ws = null;
+    clearTimeout(heartbeatTimer);
+    clearTimeout(heartbeatTimeout);
+    heartbeatSentAt = null;
+    connectionOnline = false;
+    roomSynced = false;
+    socket.close();
+    renderConnection();
+    setTimeout(open, 1200);
+  }
+  function heartbeat() {
+    if (ws !== socket || socket.readyState !== 1) return;
+    heartbeatSentAt = performance.now();
+    send({ t: 'ping', id: heartbeatSentAt });
+    heartbeatTimeout = setTimeout(reconnect, 10000);
+  }
+  heartbeatTimeout = setTimeout(reconnect, 10000);
+  socket.onopen = () => {
+    if (ws !== socket) return;
+    clearTimeout(heartbeatTimeout);
+    const room = view?.code || localStorage.getItem('swg-room');
+    const resume = room && (view || !fromUrl || fromUrl === room);
+    roomSynced = !resume;
+    if (resume) send({ t: 'join', room, token: TOKEN, resume: true });
+    heartbeat();
+  };
+  socket.onmessage = (e) => {
+    if (ws !== socket) return;
     const m = JSON.parse(e.data);
+    if (m.t === 'pong') {
+      if (heartbeatSentAt === null || m.id !== heartbeatSentAt) return;
+      latency = Math.max(0, Math.round(performance.now() - heartbeatSentAt));
+      heartbeatSentAt = null;
+      clearTimeout(heartbeatTimeout);
+      connectionOnline = true;
+      renderConnection();
+      heartbeatTimer = setTimeout(heartbeat, 10000);
+      return;
+    }
     if (m.t === 'error') {
       toast(m.msg);
-      if (m.msg === '房间不存在') { view = null; render(); }
+      if (m.msg === '房间不存在' || m.msg === '连接已失效，请重新加入房间') {
+        localStorage.removeItem('swg-room');
+        view = null;
+        roomSynced = true;
+        renderConnection();
+        render();
+      }
       return;
     }
     if (m.t === 'joined') { localStorage.setItem('swg-token', m.token); return; }
     if (m.t === 'left') {
+      localStorage.removeItem('swg-room');
       view = null;
+      roomSynced = true;
+      renderConnection();
       render();
       history.replaceState(null, '', '/');
       if (m.dissolved) toast('房主已解散房间');
       return;
     }
-    if (m.t === 'state') { view = m.view; render(); }
+    if (m.t === 'state') {
+      view = m.view;
+      roomSynced = true;
+      renderConnection();
+      try { localStorage.setItem('swg-room', view.code); }
+      catch { toast('无法保存房间连接，关闭网页后需重新输入房间码'); }
+      render();
+    }
   };
-  ws.onclose = () => setTimeout(open, 1200);
+  socket.onclose = reconnect;
+  socket.onerror = reconnect;
 }
 open();
 
@@ -688,7 +792,8 @@ function showRoundResults(history) {
 function render() {
   const enteredDone = view?.phase === 'done' && lastPhase !== 'done';
   lastPhase = view?.phase ?? null;
-  if ($('leavedialog').open && view?.hostId !== TOKEN) $('leavedialog').close();
+  $('roomexitbtn').hidden = view?.phase !== 'play';
+  if ($('leavedialog').open && !view) $('leavedialog').close();
   if ($('votedialog').open && (view?.phase !== 'play' || view.round !== Number($('votedialog').dataset.round))) {
     $('votedialog').close();
   }
@@ -768,11 +873,11 @@ function render() {
     const done = !!me?.submitted;
     if (v.round !== lastRound) { $('word').value = ''; lastRound = v.round; }
     $('word').disabled = done;
-    $('submitbtn').disabled = done;
+    updateSubmitButton();
     $('wordhint').textContent = done ? '已交卷，等搭子' : '提交后不可修改';
     $('wordhint').classList.toggle('submitted', done);
     if (done) $('word').blur(); else setTimeout(() => {
-      if (!$('votedialog').open && !$('play').hidden) $('word').focus();
+      if (!$('votedialog').open && !$('leavedialog').open && !$('play').hidden) $('word').focus();
     }, 60);
     return;
   }
@@ -910,6 +1015,7 @@ $('startbtn').onclick = () => send({ t: 'start' });
 $('submitbtn').onclick = doSubmit;
 $('word').onkeydown = (e) => { if (e.key === 'Enter') doSubmit(); };
 function doSubmit() {
+  if (!connectionOnline || !roomSynced) return toast('连接正在恢复，请稍后再试');
   const w = $('word').value.trim();
   if (!w) return toast('请输入一个词');
   send({ t: 'submit', word: w });
@@ -926,12 +1032,21 @@ $('voteconfirm').onclick = () => {
   send({ t: 'vote' });
 };
 $('restartbtn').onclick = () => send({ t: 'restart' });
-$('homebtn').onclick = $('lobbyhomebtn').onclick = () => {
-  if (view?.hostId === TOKEN) $('leavedialog').showModal();
-  else send({ t: 'leave' });
-};
+$('homebtn').onclick = $('lobbyhomebtn').onclick = $('roomexitbtn').onclick = requestLeave;
+function requestLeave() {
+  if (!view) return;
+  const isHost = view.hostId === TOKEN;
+  $('leavetitle').textContent = isHost ? '解散房间？' : '退出房间？';
+  $('leavehint').textContent = isHost
+    ? '你是房主，退出会解散房间。'
+    : '退出后，当前对局进度将清空。';
+  $('leaveconfirm').textContent = isHost ? '解散并返回' : '退出并返回';
+  $('leavedialog').showModal();
+}
 $('leavecancel').onclick = () => $('leavedialog').close();
-$('leaveconfirm').onclick = () => send({ t: 'leave' });
+$('leaveconfirm').onclick = () => {
+  if ($('leavedialog').open && view) send({ t: 'leave' });
+};
 
 /* 倒计时 */
 setInterval(() => {
@@ -944,7 +1059,7 @@ setInterval(() => {
 
 /* 主题 */
 const THEME_ORDER = ['auto', 'light', 'dark'];
-const THEME_LABEL = { auto: '◐', light: '☀', dark: '☾' };
+const THEME_LABEL = { auto: '◐', light: '☀️', dark: '🌙' };
 const THEME_NAME = { auto: '跟随系统', light: '亮色', dark: '暗色' };
 const prefersLight = matchMedia('(prefers-color-scheme: light)');
 let themeTransition = null;
@@ -986,8 +1101,8 @@ applyTheme();
 /* 初始化 */
 $('name').value = localStorage.getItem('swg-name') || '';
 $('name').onchange = () => localStorage.setItem('swg-name', $('name').value.trim());
-const fromUrl = (location.pathname.match(/^\/r\/([A-Za-z0-9]+)/) || [])[1];
-if (fromUrl) $('joincode').value = fromUrl.toUpperCase();
+const fromUrl = (location.pathname.match(/^\/r\/([A-Za-z0-9]+)/) || [])[1]?.toUpperCase();
+if (fromUrl) $('joincode').value = fromUrl;
 </script>
 </body>
 </html>
