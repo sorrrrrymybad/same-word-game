@@ -6,6 +6,8 @@
 
 ## 玩法
 
+首页「规」可查看规则说明。默认每次进入首页自动展示，勾选弹窗底部的「下次不再弹出」后在当前浏览器记住选择；仍可手动打开并取消勾选。恢复已有房间时不会自动展示。
+
 1. 房主创建房间，设置人数上限（2-8）和每轮限时
 2. 把邀请链接或 4 位房间码发给其他人
 3. 每轮所有人同时提交一个词，提交后不可修改，也看不到别人写了什么
@@ -79,7 +81,7 @@ pm2 save
 
 ## 设计取舍
 
-- 游戏界面仍为原生 HTML/JavaScript；全屏背景单独挂载 React Bits GridScan（JS-CSS），随深浅主题切换配色，尊重减少动态效果设置。组件位于 `src/components/`，网格空间已定制为竖向长方形，扫描框保持向纵深推进，贴合竖向表单；上游来源：https://reactbits.dev/r/GridScan-JS-CSS.json
+- 游戏界面仍为原生 HTML/JavaScript；全屏背景单独挂载 React Bits GridScan（JS-CSS），随深浅主题切换配色，尊重减少动态效果设置。组件位于 `src/components/`，网格空间在宽度小于 768px 时保持竖向长方形，桌面端跟随视口呈横向矩形，扫描框均保持向纵深推进；上游来源：https://reactbits.dev/r/GridScan-JS-CSS.json
 - 背景通过 React 和 esbuild 打包为本地资源，不依赖运行时 CDN；修改 `src/` 后执行 `npm run build`，部署时一并上传 `public/assets/` 中的 JS 和 CSS。仓库保留构建产物，生产环境 `npm ci --omit=dev` 后可直接启动
 - 房间状态在进程内存里，重启即丢。房间里没有值得落库的东西
 - 词比较前做 NFKC + 去空白 + 转小写，所以 `Apple` 和 `apple ` 视为同一个词

@@ -418,12 +418,12 @@ assert.ok((await (await fetch(`http://127.0.0.1:${PORT}/r/ABCD`)).text()).includ
 const gridSource = readFileSync(new URL('./src/components/GridScan.jsx', import.meta.url), 'utf8');
 const roomCode = gridSource.match(/const roomSize = \(\) => \{[\s\S]*?\n    \};/)[0];
 const rayCode = gridSource.match(/const castRay = \(u, v\) => \{[\s\S]*?\n    \};/)[0];
-for (const [width, height] of [[1280, 720], [390, 844]]) {
+for (const [width, height, expectedAspect] of [[1280, 720, 1280 / 720], [390, 844, 390 / 844], [767, 720, 0.72], [768, 720, 768 / 720]]) {
   const { roomSize, castRay } = new Function('view', 'settingsRef', 'eye',
     `${roomCode}\n${rayCode}\nreturn { roomSize, castRay };`
   )({ width, height }, { current: { cells: 8, depth: 3 } }, { x: 0, y: 0, f: 1.25 });
   const room = roomSize();
-  assert.ok(room.aspect < 1, '扫描空间在横屏和竖屏均为竖向矩形');
+  assert.equal(room.aspect, expectedAspect, '移动端保持竖向矩形，桌面端跟随视口比例');
   assert.equal(castRay(0.5, 0.5).z, room.roomDepth, '中心点击命中纵深尽头');
   assert.ok(Math.abs(castRay(1, 0.5).x - room.aspect / 2) < 1e-9, '边缘点击命中调整后的侧墙');
 }
@@ -490,6 +490,102 @@ assert.equal(counterElements.get('gamecount').textContent, '1,003', '不支持�
 counterUI.renderPublicStats(null);
 assert.equal(counterElements.get('onlinecount').textContent, '—');
 assert.equal(counterElements.get('gamecount').textContent, '—');
+
+/* ---------- 规则与历史弹窗从对应按钮放大，减少动态效果时直接打开 ---------- */
+const popupAnimations = [];
+const popupUI = { reduceMotion: { matches: false }, getComputedStyle: () => ({ transform: 'matrix(1,0,0,1,0,0)', opacity: '1' }) };
+vm.createContext(popupUI);
+vm.runInContext(page.match(/function animateButtonDialog\([^]*?\n\}/)[0], popupUI);
+const popup = {
+  scrollTop: 100,
+  showModal() { this.open = true; },
+  close() { this.open = false; },
+  getBoundingClientRect() { return { left: 100, top: 100, width: 400, height: 600 }; },
+  animate(frames) { popupAnimations.push(frames); return { cancelled: false, cancel() { this.cancelled = true; } }; },
+};
+for (const [left, offset] of [[100, -178], [152, -126]]) {
+  popupUI.animateButtonDialog(popup, { getBoundingClientRect: () => ({ left, top: 50, width: 44, height: 44 }) });
+  assert.equal(popup.open, true);
+  assert.equal(popup.scrollTop, 0, '打开时回到内容顶部');
+  assert.equal(popupAnimations.at(-1)[0].transform, `translate(${offset}px, -328px) scale(.1)`, '起点跟随对应入口按钮');
+  assert.equal(popupAnimations.at(-1)[1].opacity, 1);
+}
+const popupButton = { getBoundingClientRect: () => ({ left: 152, top: 50, width: 44, height: 44 }) };
+const openingAnimation = popup.popupAnimation;
+popupUI.animateButtonDialog(popup, popupButton, true);
+assert.equal(openingAnimation.cancelled, true, '关闭时取消未完成的展开动画');
+assert.equal(popup.open, true, '缩回动画完成前保留弹窗');
+assert.equal(popupAnimations.at(-1)[1].transform, 'translate(-126px, -328px) scale(.1)', '关闭缩回对应入口');
+const closingAnimation = popup.popupAnimation;
+openingAnimation.onfinish();
+assert.equal(popup.open, true, '旧动画回调不得提前关闭弹窗');
+closingAnimation.onfinish();
+assert.equal(popup.open, false);
+assert.equal(closingAnimation.cancelled, true, '完成后清理动画');
+popupUI.animateButtonDialog(popup, popupButton, true);
+assert.equal(popupAnimations.length, 3, '已关闭的弹窗不重复动画');
+popupUI.reduceMotion.matches = true;
+popupUI.animateButtonDialog(popup, { getBoundingClientRect: () => ({}) });
+assert.equal(popupAnimations.length, 3, '减少动态效果时不播放放大动画');
+popupUI.animateButtonDialog(popup, popupButton, true);
+assert.equal(popup.open, false, '减少动态效果时直接关闭');
+popupUI.reduceMotion.matches = false;
+delete popup.animate;
+popupUI.animateButtonDialog(popup, { getBoundingClientRect: () => ({}) });
+assert.equal(popup.open, true, '不支持动画时仍能打开弹窗');
+popupUI.animateButtonDialog(popup, popupButton, true);
+assert.equal(popup.open, false, '不支持动画时仍能关闭弹窗');
+
+/* ---------- 自动规则说明：逐次进入首页、持久化选择及手动打开 ---------- */
+const rulesStorage = new Map();
+const rulesNodes = { rulesdialog: { open: false }, rulesdontshow: { checked: false }, rulesbtn: {} };
+const rulesUI = {
+  $: id => rulesNodes[id], notices: [], opens: 0, writable: true,
+  store: { get: key => rulesStorage.get(key), set: (key, value) => { if (!rulesUI.writable) return false; rulesStorage.set(key, value); return true; } },
+  animateButtonDialog: dialog => { dialog.open = true; rulesUI.opens++; },
+  toast(text) { rulesUI.notices.push(text); },
+};
+vm.createContext(rulesUI);
+vm.runInContext(['showRules', 'saveRulesPreference'].map(name => page.match(new RegExp(`function ${name}\\([^]*?\n\}`))[0]).join('\n'), rulesUI);
+rulesUI.showRules(true);
+assert.equal(rulesUI.opens, 1, '默认自动展示规则');
+rulesUI.showRules(true);
+assert.equal(rulesUI.opens, 1, '已打开时不重复弹出');
+rulesNodes.rulesdialog.open = false;
+rulesUI.showRules(true);
+assert.equal(rulesUI.opens, 2, '未勾选时再次进入仍展示');
+rulesNodes.rulesdontshow.checked = true;
+rulesUI.saveRulesPreference();
+rulesNodes.rulesdialog.open = false;
+rulesUI.showRules(true);
+assert.equal(rulesUI.opens, 2, '勾选后阻止自动弹出');
+rulesUI.showRules();
+assert.equal(rulesUI.opens, 3, '仍可以通过规按钮手动打开');
+assert.equal(rulesNodes.rulesdontshow.checked, true);
+rulesNodes.rulesdontshow.checked = false;
+rulesUI.saveRulesPreference();
+assert.equal(rulesStorage.get('swg-hide-rules'), '0', '取消勾选恢复自动弹出');
+rulesUI.writable = false;
+rulesNodes.rulesdontshow.checked = true;
+rulesUI.saveRulesPreference();
+assert.equal(rulesNodes.rulesdontshow.checked, false, '保存失败还原选择并提示');
+assert.equal(rulesUI.notices.length, 1);
+rulesUI.writable = true;
+rulesStorage.clear();
+for (const id of ['home', 'lobby', 'play', 'done', 'publicstats', 'roundresults']) rulesNodes[id] = { hidden: false, replaceChildren() {} };
+Object.assign(rulesUI, { currentScreen: null, lobbyPlayerIds: new Set(), stopHistoryMotion() {}, stopBurst() {} });
+vm.runInContext(page.match(/function screen\(name\) \{[^]*?\n\}/)[0], rulesUI);
+rulesNodes.rulesdialog.open = false;
+const opensBeforeHome = rulesUI.opens;
+rulesUI.screen('home');
+assert.equal(rulesUI.opens, opensBeforeHome + 1, '首次首页自动展示');
+rulesNodes.rulesdialog.open = false;
+rulesUI.screen('home');
+assert.equal(rulesUI.opens, opensBeforeHome + 1, '同一首页重复渲染不会再次打扰');
+rulesUI.screen('lobby');
+rulesUI.screen('home');
+assert.equal(rulesUI.opens, opensBeforeHome + 2, '从房间返回首页再次展示');
+
 
 /* ---------- Toast 区分错误与正常反馈，连续提示重置颜色及关闭计时 ---------- */
 const toastElement = { dataset: {}, hidden: true, setAttribute(key, value) { this[key] = value; } };
@@ -664,6 +760,7 @@ assert.equal(connection.$('submitbtn').disabled, false);
 const elements = new Map();
 let bursts = 0, stops = 0;
 const context = {
+  currentScreen: null, showRules() {},
   connectionOnline: true, roomSynced: true,
   view: { phase: 'done', code: 'ABCD', config: { max: 2, timeout: 0 }, round: 1, endedBy: 'match', history: [{ round: 1, items: [] }], players: [
     { id: 'me', name: '甲', connected: true, ready: false }, { id: 'other', name: '乙', connected: true, ready: false },

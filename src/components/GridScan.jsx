@@ -556,8 +556,8 @@ export const GridScan = ({
 
     const roomSize = () => {
       const s = settingsRef.current;
-      // Keep the room portrait-shaped around the vertical form.
-      const aspect = Math.min(view.width / view.height, 0.72);
+      // Keep narrow screens portrait-shaped; let desktop follow the viewport.
+      const aspect = view.width < 768 ? Math.min(view.width / view.height, 0.72) : view.width / view.height;
       const cy = 1 / Math.round(s.cells);
       const cx = aspect / Math.max(1, Math.round(aspect / cy));
       const roomDepth = Math.max(cy, Math.round(s.depth / cy) * cy);
@@ -636,7 +636,7 @@ export const GridScan = ({
     };
 
     const aimEye = s => {
-      const aspect = Math.min(view.width / view.height, 0.72);
+      const { aspect } = roomSize();
       const drift = reduce ? 0 : 1;
       const nx = look.held ? look.x : (Math.sin(time * 0.21) * 0.2 + Math.sin(time * 0.083 + 1.3) * 0.12) * drift;
       const ny = look.held ? look.y : Math.sin(time * 0.17 + 2.1) * 0.16 * drift;

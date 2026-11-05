@@ -120,8 +120,14 @@ h1{margin:0;font-size:30px;letter-spacing:.14em}
 .home-heading h1{min-width:0}
 .icon-button{display:inline-flex;align-items:center;justify-content:center;flex:0 0 44px;width:44px;height:44px;padding:0}
 .icon-button svg{width:21px;height:21px}
-#recordsbtn{font-size:21px}
-#recordsdialog{max-width:540px}
+.home-actions{display:flex;gap:8px;flex-shrink:0}
+#rulesbtn,#recordsbtn{font-size:21px}
+#rulesdialog,#recordsdialog{max-width:540px;transition:none}
+.rules-content h3{margin:20px 0 6px;font-size:15px;color:var(--fg)}
+.rules-content p{margin:0;color:var(--dim);font-size:14px;line-height:1.8}
+.rules-preference{display:flex;align-items:center;gap:8px;min-height:44px;margin:20px 0 0;color:var(--fg);font-size:13px;letter-spacing:0;cursor:pointer}
+.rules-preference input{width:18px;height:18px;margin:0;accent-color:var(--accent)}
+@media(max-width:360px){.home-heading{gap:8px}.home-heading h1{font-size:24px;letter-spacing:.08em}}
 .records-heading h2{margin:0;color:var(--fg)}
 .records-note{margin:12px 0 18px;color:var(--dim);font-size:12px;line-height:1.8}
 #recordslist{display:grid;gap:12px}
@@ -316,7 +322,10 @@ summary:hover{color:var(--fg)}
 <section id="home">
   <div class="home-heading">
     <h1>同频猜词</h1>
-    <button id="recordsbtn" class="ghost icon-button" aria-label="查看本地战绩" title="本地战绩">历</button>
+    <div class="home-actions">
+      <button id="rulesbtn" class="ghost icon-button" aria-label="查看规则说明" title="规则说明">规</button>
+      <button id="recordsbtn" class="ghost icon-button" aria-label="查看历史记录" title="历史记录">历</button>
+    </div>
   </div>
   <p class="sub">平时聊得挺好，看看是不是各聊各的。</p>
 
@@ -415,10 +424,31 @@ summary:hover{color:var(--fg)}
 
 <footer id="publicstats" title="在线按网页连接计数，同一人打开多个标签页会分别计数">有 <span id="onlinecount" class="stat-number">—</span> 位搭子在线 ｜ 全网已同频 <span id="gamecount" class="stat-number">—</span> 次</footer>
 </main>
+<dialog id="rulesdialog" aria-labelledby="rulestitle">
+  <div class="records-heading">
+    <h2 id="rulestitle" tabindex="-1" autofocus>规则说明</h2>
+    <button id="rulesclose" class="ghost icon-button" aria-label="关闭规则说明"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  </div>
+  <div class="rules-content">
+    <h3>1. 组个局，叫上搭子</h3>
+    <p>起个名字（留空也可以，系统会帮你），选择 2–8 人和每轮限时，点击「组个局」。把邀请链接或 4 位房间码发给朋友；加入的人填写昵称和房间码，点击「加入这局」。至少两人在线后，由房主开始。</p>
+    <h3>2. 没有提示，凭默契写词</h3>
+    <p>每人各写一个词，目标是所有人写出同一个词。点击「提交」后不能修改，也看不到别人这一轮写了什么。所有在线玩家提交完或时间到，就会公布结果；限时结束还没提交的视为弃权。</p>
+    <h3>3. 看上一轮，继续对频</h3>
+    <p>所有人的词完全一致就成功；否则自动进入下一轮，可以根据上一轮结果继续猜。前面轮次已经出现过的词不能再用。</p>
+    <h3>4. 意思一样？大家说了算</h3>
+    <p>如果词不同但大家认为意思相同，例如「土豆」和「马铃薯」，可以点「这轮算同频？」投票。所有在线玩家都同意，也算成功。</p>
+    <h3>5. 再来一局，或返回主页</h3>
+    <p>成功后点击「再来一局」准备，至少两名在线玩家全部准备后就会开始；再点一次可以取消准备。主动退出会中断当前对局，房主退出会解散房间。</p>
+    <h3>6. 用「历」回看成功记录</h3>
+    <p>首页「历」按钮可以回看成功完成的对局。只有中途未断线、未退出的成功对局会保存；记录仅存在当前浏览器中，清除浏览器数据后无法找回。</p>
+  </div>
+  <label class="rules-preference"><input id="rulesdontshow" type="checkbox">下次不再弹出</label>
+</dialog>
 <dialog id="recordsdialog" aria-labelledby="recordstitle" aria-describedby="recordsnotice">
   <div class="records-heading">
     <h2 id="recordstitle" tabindex="-1" autofocus>历史战绩</h2>
-    <button id="recordsclose" class="ghost icon-button" aria-label="关闭本地战绩"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+    <button id="recordsclose" class="ghost icon-button" aria-label="关闭历史记录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   </div>
   <p id="recordsnotice" class="records-note">记录仅保存在本地，不会上传。清除浏览器数据或更换浏览器后无法找回。仅保存成功完成且中途未断线、未退出的对局。</p>
   <div id="recordslistpanel">
@@ -490,6 +520,7 @@ const TOKEN = store.get('swg-token') || (() => {
 let ws = null, view = null, lastRound = null, lastPhase = null, seenRound = null;
 let saidText = '', saidRound = 0, saidResult = 0, saidVotes = 0;
 let lobbyPlayerIds = new Set();
+let currentScreen = null;
 let historyAnimation = null;
 let recordedGameId = null;
 const RECORDS_KEY = 'swg-records-v1';
@@ -650,6 +681,8 @@ open();
 
 /* ------------------------------ 渲染 ------------------------------ */
 function screen(name) {
+  const enteringHome = name === 'home' && currentScreen !== 'home';
+  currentScreen = name;
   for (const id of ['home', 'lobby', 'play', 'done']) $(id).hidden = (id !== name);
   $('publicstats').hidden = name !== 'home';
   if (name !== 'play') {
@@ -658,6 +691,7 @@ function screen(name) {
   }
   if (name !== 'lobby') lobbyPlayerIds.clear();
   if (name !== 'done') { stopHistoryMotion(); stopBurst(); }
+  if (enteringHome) showRules(true);
 }
 
 function stopHistoryMotion() {
@@ -718,7 +752,7 @@ function roundCard(r, featured = false, players = view?.players || []) {
   </div>`;
 }
 
-/* ------------------------------ 本地战绩 ------------------------------ */
+/* ------------------------------ 历史记录 ------------------------------ */
 function readLocalRecords() {
   try {
     const records = JSON.parse(store.get(RECORDS_KEY) || '[]');
@@ -741,7 +775,7 @@ function saveSuccessfulGame(v) {
       || v.gameId === recordedGameId) return;
   recordedGameId = v.gameId;
   const records = readLocalRecords();
-  if (!records) { toast('本地战绩暂时无法读取，本局未保存。'); return; }
+  if (!records) { toast('历史记录暂时无法读取，本局未保存。'); return; }
   if (records.some((r) => r.id === v.gameId)) return;
   const participants = v.history.at(-1).items;
   if (participants.length < 2) return;
@@ -764,19 +798,19 @@ function recordSummary(record) {
 
 function renderLocalRecords() {
   const records = readLocalRecords();
-  $('recordstitle').textContent = '本地战绩';
+  $('recordstitle').textContent = '历史记录';
   $('recordsnotice').hidden = false;
   $('recordslistpanel').hidden = false;
   $('recorddetailpanel').hidden = true;
   $('recordsempty').hidden = !!records?.length;
-  $('recordsempty').textContent = records ? '还没有成功对频的记录。下次接上脑回路，这里替你记一笔。' : '本地战绩暂时无法读取，请检查浏览器的存储权限。';
+  $('recordsempty').textContent = records ? '还没有成功对频的记录。下次接上脑回路，这里替你记一笔。' : '历史记录暂时无法读取，请检查浏览器的存储权限。';
   $('recordslist').innerHTML = (records || []).map((r) => `<li><button class="ghost record-entry" data-record-id="${esc(r.id)}">${recordSummary(r)}</button></li>`).join('');
   $('recordsdialog').scrollTop = 0;
 }
 
 function showLocalRecord(id) {
   const record = readLocalRecords()?.find((r) => r.id === id);
-  if (!record) { toast('这条本地战绩暂时无法读取。'); return; }
+  if (!record) { toast('这条历史记录暂时无法读取。'); return; }
   $('recordstitle').textContent = '对局回看';
   $('recordsnotice').hidden = true;
   $('recordslistpanel').hidden = true;
@@ -1037,8 +1071,54 @@ $('copybtn').onclick = async () => {
 };
 // 手机上点一下也能直接选中，方便手动复制
 $('lobbylink').onclick = (e) => e.target.select();
-$('recordsbtn').onclick = () => { renderLocalRecords(); $('recordsdialog').showModal(); };
-$('recordsclose').onclick = () => $('recordsdialog').close();
+function animateButtonDialog(dialog, button, closing = false) {
+  if (closing && !dialog.open) return;
+  const origin = button.getBoundingClientRect();
+  if (!closing) {
+    dialog.showModal();
+    dialog.scrollTop = 0;
+  }
+  const current = closing ? { transform: getComputedStyle(dialog).transform, opacity: getComputedStyle(dialog).opacity } : null;
+  dialog.popupAnimation?.cancel();
+  dialog.popupAnimation = null;
+  if (reduceMotion.matches || !dialog.animate) {
+    if (closing) dialog.close();
+    return;
+  }
+  const rect = dialog.getBoundingClientRect();
+  const x = origin.left + origin.width / 2 - rect.left - rect.width / 2;
+  const y = origin.top + origin.height / 2 - rect.top - rect.height / 2;
+  const collapsed = { transform: `translate(${x}px, ${y}px) scale(.1)`, opacity: 0 };
+  const expanded = { transform: 'translate(0, 0) scale(1)', opacity: 1 };
+  const animation = dialog.popupAnimation = dialog.animate(closing ? [current, collapsed] : [collapsed, expanded], {
+    duration: closing ? 180 : 240, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'both',
+  });
+  animation.onfinish = () => {
+    if (dialog.popupAnimation !== animation) return;
+    dialog.popupAnimation = null;
+    if (closing) dialog.close();
+    animation.cancel();
+  };
+}
+function showRules(automatic = false) {
+  if ($('rulesdialog').open || (automatic && store.get('swg-hide-rules') === '1')) return;
+  $('rulesdontshow').checked = store.get('swg-hide-rules') === '1';
+  animateButtonDialog($('rulesdialog'), $('rulesbtn'));
+}
+function saveRulesPreference() {
+  if (!store.set('swg-hide-rules', $('rulesdontshow').checked ? '1' : '0')) {
+    $('rulesdontshow').checked = store.get('swg-hide-rules') === '1';
+    toast('无法保存规则偏好，请检查浏览器的存储权限。');
+  }
+}
+$('rulesdontshow').onchange = saveRulesPreference;
+$('rulesbtn').onclick = () => showRules();
+$('recordsbtn').onclick = () => { renderLocalRecords(); animateButtonDialog($('recordsdialog'), $('recordsbtn')); };
+for (const name of ['rules', 'records']) {
+  const close = () => animateButtonDialog($(name + 'dialog'), $(name + 'btn'), true);
+  $(name + 'close').onclick = close;
+  $(name + 'dialog').oncancel = (event) => { event.preventDefault(); close(); };
+}
 $('recordbackbtn').onclick = () => { renderLocalRecords(); $('recordstitle').focus({ preventScroll: true }); };
 $('recorddeletebtn').onclick = () => {
   $('recorddeleteerror').hidden = true;
@@ -1151,6 +1231,8 @@ $('name').value = store.get('swg-name') || '';
 $('name').onchange = () => store.set('swg-name', $('name').value.trim());
 const fromUrl = (location.pathname.match(/^\/r\/([A-Za-z0-9]+)/) || [])[1]?.toUpperCase();
 if (fromUrl) $('joincode').value = fromUrl;
+const savedRoom = store.get('swg-room');
+if (!savedRoom || (fromUrl && fromUrl !== savedRoom)) screen('home');
 </script>
 </body>
 </html>
