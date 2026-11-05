@@ -125,9 +125,10 @@ h1{margin:0;font-size:30px;letter-spacing:.14em}
 #rulesdialog,#recordsdialog{max-width:540px;transition:none}
 .rules-content h3{margin:20px 0 6px;font-size:15px;color:var(--fg)}
 .rules-content p{margin:0;color:var(--dim);font-size:14px;line-height:1.8}
-.rules-preference{display:flex;align-items:center;gap:8px;min-height:44px;margin:20px 0 0;color:var(--fg);font-size:13px;letter-spacing:0;cursor:pointer}
+.rules-preference{position:sticky;bottom:-24px;z-index:1;display:flex;align-items:center;gap:8px;min-height:56px;margin:20px -24px -24px;padding:12px 24px;background:var(--card);border-top:1px solid var(--line);color:var(--fg);font-size:13px;letter-spacing:0;cursor:pointer}
 .rules-preference input{width:18px;height:18px;margin:0;accent-color:var(--accent)}
 @media(max-width:360px){.home-heading{gap:8px}.home-heading h1{font-size:24px;letter-spacing:.08em}}
+.records-heading{position:sticky;top:-24px;z-index:2;margin:-24px -24px 0;padding:24px 24px 12px;background:var(--card);border-bottom:1px solid var(--line)}
 .records-heading h2{margin:0;color:var(--fg)}
 .records-note{margin:12px 0 18px;color:var(--dim);font-size:12px;line-height:1.8}
 #recordslist{display:grid;gap:12px}
@@ -186,10 +187,12 @@ button:disabled{opacity:.4;cursor:not-allowed;box-shadow:none}
 button.ghost{background:var(--card2);border:1px solid var(--field-line);color:var(--fg);font-weight:500;box-shadow:none}
 button.ok{background:var(--ok);color:var(--ok-ink);box-shadow:none}
 button.voted{background:var(--card2);border:1px solid var(--ok);color:var(--ok);font-weight:500;box-shadow:none}
+html:has(dialog[open]),body:has(dialog[open]){overflow:hidden;overscroll-behavior:none}
+dialog{overscroll-behavior:none}
 dialog{width:calc(100% - 48px);max-width:420px;max-height:calc(100dvh - 48px);overflow:auto;padding:24px;border:1px solid var(--line-strong);border-radius:20px;background:var(--card);color:var(--fg);box-shadow:var(--shadow)}
 dialog{opacity:0;transform:scale(.97);transition:opacity .12s ease,transform .12s ease,display .12s allow-discrete,overlay .12s allow-discrete}
 dialog[open]{opacity:1;transform:scale(1);transition-duration:.16s}
-dialog::backdrop{background:rgba(0,0,0,0);transition:background-color .12s ease,display .12s allow-discrete,overlay .12s allow-discrete}
+dialog::backdrop{overflow:hidden;overscroll-behavior:none;touch-action:none;background:rgba(0,0,0,0);transition:background-color .12s ease,display .12s allow-discrete,overlay .12s allow-discrete}
 dialog[open]::backdrop{background:rgba(0,0,0,.55);transition-duration:.16s}
 @starting-style{
   dialog[open]{opacity:0;transform:scale(.97)}
