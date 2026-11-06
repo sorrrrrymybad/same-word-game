@@ -21,6 +21,7 @@
 </script>
 <link rel="stylesheet" href="/assets/background.css">
 <script type="module" src="/assets/background.js"></script>
+<link rel="preload" as="image" href="/assets/tomato.png">
 <style>
 *{box-sizing:border-box;scrollbar-width:none}
 *::-webkit-scrollbar{display:none}
@@ -242,6 +243,11 @@ button.avatar:disabled{opacity:1;cursor:default}
 .react-screen{position:fixed;inset:0;z-index:98;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}
 .react-screen span{font-size:96px;line-height:1}
 .react-screen b{padding:6px 16px;border-radius:999px;background:var(--card);color:var(--fg);font-size:16px;letter-spacing:.06em;box-shadow:var(--shadow)}
+.tomato-sprite{position:absolute;width:32px;height:32px;background:url('/assets/tomato.png') no-repeat;image-rendering:pixelated;transform:translate(-50%,-50%)}
+.react-fly.tomato-sprite{position:fixed}
+.tomato-particle{position:absolute;background:tomato}
+.react-tomato{overflow:hidden}
+.react-tomato b{position:absolute;top:calc(45% + 144px);max-width:calc(100% - 32px);text-align:center}
 .cfg{color:var(--dim);font-size:12.5px;margin:14px 0 18px}
 #waithost{margin:28px 0 8px;text-align:center}
 #waithost:not([hidden])+#lobbyhomebtn{margin-top:0}
@@ -389,7 +395,10 @@ summary:hover{color:var(--fg)}
     </div>
   </div>
   <div class="cfg" id="lobbycfg"></div>
-  <h2>玩家 <span id="lobbycount"></span></h2>
+  <div class="result-header" style="margin-bottom:16px">
+    <h2 style="margin:0;flex-shrink:0">玩家 <span id="lobbycount"></span></h2>
+    <p class="cfg" style="margin:0;text-align:right">点点头像试试看</p>
+  </div>
   <ul id="lobbyplayers" class="avatars"></ul>
   <button id="startbtn" class="wide mt">开始对频</button>
   <p id="waithost" class="cfg">等待房主开始</p>
@@ -1084,7 +1093,7 @@ function burst() {
   })();
 }
 
-// 砸番茄 / 点赞：从发送者头像飞到目标头像，落地后被砸的人再来一下全屏
+// 先从发送者头像飞到目标头像，再为接收者播放单次全屏效果。
 const REACTIONS = { tomato: ['🍅', '朝你扔了番茄'], like: ['👍', '给你点了赞'] };
 function showReaction({ from, to, kind }) {
   const sender = view?.players.find((p) => p.id === from);
@@ -1093,20 +1102,80 @@ function showReaction({ from, to, kind }) {
   const face = (id) => $(currentScreen).querySelector(`[data-player-id="${CSS.escape(id)}"] .avatar-face`);
   const start = face(from), end = face(to);
   const land = () => {
-    if (end?.isConnected) hitAvatar(end, kind, emoji);
+    if (end?.isConnected) hitAvatar(end, kind);
     if (to !== playerId) return;
     announce(`${sender.name}${text}`);
-    reactScreen(kind, emoji, `${sender.name} ${text}`);
+    if (kind === 'tomato') throwTomato(`${sender.name} ${text}`);
+    else reactScreen(emoji, `${sender.name} ${text}`);
   };
   if (!start || !end || reduceMotion.matches) return land();
   const a = start.getBoundingClientRect(), b = end.getBoundingClientRect();
   const dx = b.left - a.left, dy = b.top - a.top;
-  const fly = floater('react-fly', emoji, a);
-  // 抛物线：中段抬高放大，番茄边飞边转
+  const fly = floater(kind === 'tomato' ? 'react-fly tomato-sprite' : 'react-fly', kind === 'tomato' ? '' : emoji, a);
+  // 抛物线：中段抬高放大
   fly.animate(Array.from({ length: 9 }, (_, i) => {
     const t = i / 8, arc = 4 * t * (1 - t);
     return { transform: `translate(-50%,-50%) translate(${dx * t}px,${dy * t - 80 * arc}px) rotate(${kind === 'tomato' ? t * 540 : 0}deg) scale(${1 + .4 * arc})` };
   }), { duration: 560 }).onfinish = () => { fly.remove(); land(); };
+}
+
+// Author: Sorrymybad. Adapted from Quinten Clause's Tomato Smash (MIT); see /assets/tomato-smash-LICENSE.txt.
+function throwTomato(text) {
+  const layers = document.querySelectorAll('.react-screen');
+  if (layers.length >= 3) layers[0].remove();
+  const el = document.createElement('div');
+  el.className = 'react-screen react-tomato';
+  el.setAttribute('aria-hidden', 'true');
+  const x = innerWidth / 2, y = innerHeight * .45;
+  const size = Math.min(256, innerWidth * .65, innerHeight * .45);
+  const scale = size / 32, still = reduceMotion.matches;
+  const sprite = document.createElement('div');
+  sprite.className = 'tomato-sprite';
+  sprite.style.left = x + 'px'; sprite.style.top = y + 'px';
+  el.append(sprite);
+  document.body.append(el);
+  const transform = (s) => `translate(-50%,-50%) scale(${s})`;
+  const splat = () => {
+    if (!el.isConnected) return;
+    sprite.style.backgroundPositionX = -32 * (1 + Math.floor(Math.random() * 7)) + 'px';
+    sprite.style.transform = transform(scale);
+    if (text) {
+      const caption = document.createElement('b');
+      caption.textContent = text;
+      el.append(caption);
+    }
+    if (!still) {
+      // 原作的 20 个重力飞溅粒子和 3 条下淌汁液，随撞击尺寸缩放。
+      for (let i = 0; i < 23; i++) {
+        const drip = i >= 20, dot = document.createElement('div');
+        dot.className = 'tomato-particle';
+        dot.style.left = x + (drip ? -8 + Math.random() * 16 : 0) * scale + 'px';
+        dot.style.top = y + 'px';
+        dot.style.width = ((drip ? 1 : 2) + Math.floor(Math.random() * 3)) * scale + 'px';
+        dot.style.height = (2 + Math.floor(Math.random() * 3)) * scale + 'px';
+        el.append(dot);
+        const vx = drip ? 0 : -120 + Math.random() * 240;
+        const vy = drip ? Math.random() * 40 : -60 + Math.random() * 120;
+        dot.animate(Array.from({ length: 9 }, (_, j) => {
+          const t = j / 8;
+          return { transform: `translate(${vx * t * scale}px,${(vy * t + (drip ? 0 : 160 * t * t)) * scale}px)`, opacity: 1 - t };
+        }), { duration: 1000 });
+      }
+    }
+    el.animate(still ? [{ opacity: 1 }, { opacity: 0 }] : [
+      { transform: 'none', backgroundColor: '#ff634733', opacity: 1 },
+      { transform: 'translateX(-4px)', offset: .03 },
+      { transform: 'translateX(4px)', offset: .06 },
+      { transform: 'none', backgroundColor: 'transparent', offset: .14 },
+      { opacity: 1, offset: .65 }, { opacity: 0 },
+    ], { duration: 1100 }).onfinish = () => el.remove();
+  };
+  if (still) return splat();
+  sprite.animate([
+    { transform: transform(scale * .08) },
+    { transform: transform(scale * .3), offset: .55 },
+    { transform: transform(scale) },
+  ], { duration: 350, easing: 'ease-in' }).onfinish = splat;
 }
 
 function floater(className, text, rect) {
@@ -1120,41 +1189,30 @@ function floater(className, text, rect) {
   return el;
 }
 
-function hitAvatar(face, kind, emoji) {
-  const still = reduceMotion.matches, tomato = kind === 'tomato';
-  const pop = floater('react-pop', tomato ? emoji : '+1', face.getBoundingClientRect());
+function hitAvatar(face, kind) {
+  const still = reduceMotion.matches;
+  if (kind === 'tomato') {
+    if (!still) face.animate([
+      { transform: 'none' }, { transform: 'translateX(-5px) rotate(-8deg)' },
+      { transform: 'translateX(5px) rotate(8deg)' }, { transform: 'none' },
+    ], { duration: 360 });
+    return;
+  }
+  const pop = floater('react-pop', '+1', face.getBoundingClientRect());
   pop.animate(still ? [{ opacity: 0 }, { opacity: 1 }, { opacity: 0 }]
-    : tomato ? [{ transform: 'translate(-50%,-50%) scale(1.6)' }, { transform: 'translate(-50%,-50%) scale(2.8)', opacity: 0 }]
     : [{ transform: 'translate(-50%,-50%)' }, { transform: 'translate(-50%,-220%)', opacity: 0 }],
   { duration: still ? 900 : 600, easing: 'ease-out' }).onfinish = () => pop.remove();
   if (still) return;
-  face.animate(tomato
-    ? [{ transform: 'none' }, { transform: 'translateX(-5px) rotate(-8deg)' }, { transform: 'translateX(5px) rotate(8deg)' }, { transform: 'translateX(-3px)' }, { transform: 'none' }]
-    : [{ transform: 'scale(1)' }, { transform: 'scale(1.25)' }, { transform: 'scale(1)' }], { duration: 360 });
+  face.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.25)' }, { transform: 'scale(1)' }], { duration: 360 });
 }
 
 // 全屏效果不接收点击，对局中照样能打字提交；连续被砸最多叠 3 层
-function reactScreen(kind, emoji, text) {
+function reactScreen(emoji, text) {
   const layers = document.querySelectorAll('.react-screen');
   if (layers.length >= 3) layers[0].remove();
   const el = document.createElement('div');
   el.className = 'react-screen';
   el.setAttribute('aria-hidden', 'true');
-  if (kind === 'tomato') {
-    // 三团番茄汁，每团周围再溅出一圈小汁点，边缘才不像波点
-    const v = Math.min(innerWidth, innerHeight) / 100, blobs = [];
-    const blob = (x, y, r) => `radial-gradient(circle at ${x}px ${y}px,rgba(214,40,40,.82) ${r}px,transparent ${r + 1}px)`;
-    for (let i = 0; i < 3; i++) {
-      const x = i ? Math.random() * innerWidth : innerWidth / 2, y = i ? Math.random() * innerHeight : innerHeight * .45;
-      const r = (i ? 8 + Math.random() * 8 : 20) * v;
-      blobs.push(blob(x, y, r));
-      for (let j = 0; j < 8; j++) {
-        const a = Math.random() * Math.PI * 2, d = r * (1.05 + Math.random() * .6);
-        blobs.push(blob(x + Math.cos(a) * d, y + Math.sin(a) * d, r * (.08 + Math.random() * .22)));
-      }
-    }
-    el.style.background = blobs.join(',');
-  }
   el.innerHTML = `<span>${emoji}</span><b>${esc(text)}</b>`;
   document.body.append(el);
   const still = reduceMotion.matches;
@@ -1162,7 +1220,7 @@ function reactScreen(kind, emoji, text) {
     ? [{ opacity: 0 }, { opacity: 1, offset: .15 }, { opacity: 1, offset: .6 }, { opacity: 0 }]
     : [{ opacity: 0, transform: 'scale(1.15)' }, { opacity: 1, transform: 'scale(1)', offset: .1 }, { opacity: 1, transform: 'none', offset: .6 }, { opacity: 0, transform: 'translateY(3vh)' }],
   { duration: 1400, easing: 'ease-out' }).onfinish = () => el.remove();
-  if (kind === 'like' && !still) burst();
+  if (!still) burst();
 }
 
 let toastTimer, toastAnimation;

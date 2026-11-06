@@ -385,6 +385,8 @@ const server = createServer(async (req, res) => {
     '/favicon.ico': 'image/x-icon',
     '/assets/background.js': 'text/javascript; charset=utf-8',
     '/assets/background.css': 'text/css; charset=utf-8',
+    '/assets/tomato.png': 'image/png',
+    '/assets/tomato-smash-LICENSE.txt': 'text/plain; charset=utf-8',
   };
   if (Object.hasOwn(assetTypes, path)) {
     try {

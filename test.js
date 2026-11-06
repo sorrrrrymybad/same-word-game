@@ -671,6 +671,80 @@ assert.equal((await fetch(`http://127.0.0.1:${PORT}/src/background.jsx`)).status
 assert.match(page, /id="grid-background" aria-hidden="true"/);
 assert.match(page, /#grid-background\{[^}]*pointer-events:none/);
 assert.ok((await (await fetch(`http://127.0.0.1:${PORT}/r/ABCD`)).text()).includes('/assets/background.js'));
+
+/* ---------- 番茄保留头像飞行，全屏只飞近一颗并自动爆开、清理 ---------- */
+const tomatoAsset = await fetch(`http://127.0.0.1:${PORT}/assets/tomato.png`);
+assert.equal(tomatoAsset.status, 200);
+assert.equal(tomatoAsset.headers.get('content-type'), 'image/png');
+assert.equal(Buffer.from(await tomatoAsset.arrayBuffer()).readUInt32BE(16), 256, '本地贴图包含八个 32px 帧');
+assert.match(await (await fetch(`http://127.0.0.1:${PORT}/assets/tomato-smash-LICENSE.txt`)).text(), /Copyright \(c\) 2019 Quinten Clause/);
+const reactionNodes = [], reactionAnimations = [], reactionNotices = [];
+function reactionNode() {
+  return {
+    style: {}, children: [], isConnected: false,
+    setAttribute() {}, getBoundingClientRect: () => ({ left: 20, top: 40, width: 44, height: 44 }),
+    append(child) { child.isConnected = this.isConnected; this.children.push(child); },
+    remove() { this.isConnected = false; },
+    animate(frames, options) {
+      const animation = { target: this, frames, options };
+      reactionAnimations.push(animation);
+      return animation;
+    },
+  };
+}
+const reactionFace = reactionNode();
+reactionFace.isConnected = true;
+const reactionUI = {
+  view: { players: [{ id: 'sender', name: '发送者' }] }, playerId: 'receiver', currentScreen: 'play',
+  innerWidth: 390, innerHeight: 844, reduceMotion: { matches: false }, CSS: { escape: (id) => id },
+  $: () => ({ querySelector: () => reactionFace }), announce: (text) => reactionNotices.push(text),
+  burst() {}, esc: (text) => text,
+  document: {
+    createElement: reactionNode,
+    querySelectorAll: () => reactionNodes.filter((el) => el.isConnected && el.className.includes('react-screen')),
+    body: { append(el) { el.isConnected = true; el.children.forEach((child) => { child.isConnected = true; }); reactionNodes.push(el); } },
+  },
+};
+vm.createContext(reactionUI);
+vm.runInContext(page.slice(page.indexOf('const REACTIONS ='), page.indexOf('let toastTimer')), reactionUI);
+reactionUI.showReaction({ from: 'sender', to: 'receiver', kind: 'tomato' });
+assert.equal(reactionNodes.length, 1, '先保留一次头像之间的飞行');
+assert.equal(reactionNodes[0].className, 'react-fly tomato-sprite');
+assert.equal(reactionAnimations[0].options.duration, 560);
+reactionAnimations[0].onfinish();
+const tomatoLayer = reactionNodes.find((el) => el.className === 'react-screen react-tomato');
+assert.ok(tomatoLayer?.isConnected, '落地后接收者播放全屏番茄');
+assert.equal(reactionNodes[0].isConnected, false);
+assert.deepEqual(reactionNotices, ['发送者朝你扔了番茄']);
+const tomatoSprite = tomatoLayer.children[0];
+const approach = reactionAnimations.find((animation) => animation.target === tomatoSprite);
+assert.equal(approach.options.duration, 350);
+assert.ok(!approach.options.iterations, '飞近不循环');
+approach.onfinish();
+assert.match(tomatoSprite.style.backgroundPositionX, /^-(32|64|96|128|160|192|224)px$/, '自动切换为爆开的贴图帧');
+assert.equal(tomatoLayer.children.filter((child) => child.className === 'tomato-sprite').length, 1);
+assert.equal(tomatoLayer.children.filter((child) => child.className === 'tomato-particle').length, 23);
+reactionAnimations.find((animation) => animation.target === tomatoLayer).onfinish();
+assert.equal(tomatoLayer.isConnected, false, '爆炸结束移除整层，不再生成下一颗');
+const previousNodes = reactionNodes.length;
+reactionUI.playerId = 'sender';
+reactionUI.showReaction({ from: 'sender', to: 'receiver', kind: 'tomato' });
+reactionAnimations.findLast((animation) => animation.target === reactionNodes.at(-1)).onfinish();
+assert.equal(reactionNodes.length, previousNodes + 1, '发送者只看到头像飞行，不播放接收者的全屏效果');
+reactionUI.reduceMotion.matches = true;
+reactionUI.playerId = 'receiver';
+const previousAnimations = reactionAnimations.length;
+reactionUI.showReaction({ from: 'sender', to: 'receiver', kind: 'tomato' });
+assert.equal(reactionAnimations.length, previousAnimations + 1, '减少动态效果时只淡出番茄汁，无飞行、震屏或粒子');
+reactionAnimations.at(-1).onfinish();
+for (let i = 0; i < 4; i++) reactionUI.throwTomato('连发');
+assert.equal(reactionUI.document.querySelectorAll().length, 3, '并发互动最多三层');
+reactionUI.reduceMotion.matches = false;
+reactionUI.showReaction({ from: 'sender', to: 'receiver', kind: 'like' });
+const likeFly = reactionNodes.at(-1);
+assert.equal(likeFly.textContent, '👍', '点赞继续使用原有飞行效果');
+reactionAnimations.findLast((animation) => animation.target === likeFly).onfinish();
+assert.equal(reactionNodes.at(-1).className, 'react-screen');
 const gridSource = readFileSync(new URL('./src/components/GridScan.jsx', import.meta.url), 'utf8');
 const roomCode = gridSource.match(/const roomSize = \(\) => \{[\s\S]*?\n    \};/)[0];
 const rayCode = gridSource.match(/const castRay = \(u, v\) => \{[\s\S]*?\n    \};/)[0];
