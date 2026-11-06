@@ -4,6 +4,8 @@
 
 昵称留空会从热梗昵称池随机分配，同房间自动分配的昵称不重名，断线重连保留昵称；自定义昵称照常使用。
 
+玩家头像使用 [DiceBear Fun Emoji](https://www.dicebear.com/styles/fun-emoji/)，以完整昵称为种子，相同昵称生成相同头像。图片通过 DiceBear 公共接口加载，昵称会作为请求参数发送给该服务；头像加载依赖外部网络。图案由 Davis Uche 创作，采用 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) 授权。
+
 砸番茄的像素贴图及飞溅逻辑改编自 Quinten Clause 的 [Tomato Smash](https://github.com/quinten/tomato-smash)（MIT），素材和授权声明位于 `public/assets/tomato.png`、`public/assets/tomato-smash-LICENSE.txt`。保留从发送者头像飞到目标头像的一次飞行；到达后，仅接收者看到一颗番茄从屏幕深处飞近、自动爆开并消失，不循环。开启“减少动态效果”时跳过飞行，仅显示淡出的番茄汁。
 
 ## 玩法

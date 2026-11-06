@@ -681,7 +681,7 @@ assert.match(await (await fetch(`http://127.0.0.1:${PORT}/assets/tomato-smash-LI
 const reactionNodes = [], reactionAnimations = [], reactionNotices = [];
 function reactionNode() {
   return {
-    style: {}, children: [], isConnected: false,
+    style: { setProperty(name, value) { this[name] = value; } }, dataset: {}, children: [], isConnected: false,
     setAttribute() {}, getBoundingClientRect: () => ({ left: 20, top: 40, width: 44, height: 44 }),
     append(child) { child.isConnected = this.isConnected; this.children.push(child); },
     remove() { this.isConnected = false; },
@@ -745,6 +745,28 @@ const likeFly = reactionNodes.at(-1);
 assert.equal(likeFly.textContent, '👍', '点赞继续使用原有飞行效果');
 reactionAnimations.findLast((animation) => animation.target === likeFly).onfinish();
 assert.equal(reactionNodes.at(-1).className, 'react-screen');
+for (const layer of reactionUI.document.querySelectorAll()) layer.remove();
+reactionUI.reduceMotion.matches = true;
+reactionUI.reactScreen('👍', '第一个');
+const firstReaction = reactionNodes.at(-1);
+assert.equal(firstReaction.style['--react-x'], '0px', '单个互动保持居中');
+reactionUI.throwTomato('第二个');
+const secondReaction = reactionNodes.at(-1);
+reactionUI.reactScreen('👍', '第三个');
+const thirdReaction = reactionNodes.at(-1);
+assert.equal(new Set(reactionUI.document.querySelectorAll().map((layer) => layer.dataset.slot)).size, 3, '混合点赞和番茄也占用不同位置');
+assert.ok(parseFloat(secondReaction.style['--react-x']) < 0);
+assert.ok(parseFloat(secondReaction.style['--react-y']) < 0);
+assert.ok(parseFloat(thirdReaction.style['--react-x']) > 0);
+assert.ok(parseFloat(thirdReaction.style['--react-y']) > 0);
+assert.equal(secondReaction.children[0].style.left, 195 + parseFloat(secondReaction.style['--react-x']) + 'px', '番茄本体和文字使用相同横向偏移');
+assert.equal(firstReaction.style['--react-x'], '0px', '新效果不移动已出现的效果');
+secondReaction.remove();
+reactionUI.throwTomato('复用空位');
+assert.equal(reactionNodes.at(-1).dataset.slot, secondReaction.dataset.slot, '中间效果消失后复用空位，不和现存效果重叠');
+reactionUI.reactScreen('👍', '超过三层');
+assert.equal(firstReaction.isConnected, false, '超过三层仍移除最早的效果');
+assert.equal(new Set(reactionUI.document.querySelectorAll().map((layer) => layer.dataset.slot)).size, 3);
 const gridSource = readFileSync(new URL('./src/components/GridScan.jsx', import.meta.url), 'utf8');
 const roomCode = gridSource.match(/const roomSize = \(\) => \{[\s\S]*?\n    \};/)[0];
 const rayCode = gridSource.match(/const castRay = \(u, v\) => \{[\s\S]*?\n    \};/)[0];
@@ -1093,7 +1115,7 @@ assert.equal(connection.$('submitbtn').disabled, false);
 const elements = new Map();
 let bursts = 0, stops = 0;
 const context = {
-  currentScreen: null, showRules() {},
+  currentScreen: null, showRules() {}, URLSearchParams,
   connectionOnline: true, roomSynced: true,
   view: { phase: 'done', code: 'ABCD', config: { max: 2, timeout: 0 }, round: 1, endedBy: 'match', history: [{ round: 1, items: [] }], players: [
     { id: 'me', name: '甲', connected: true, ready: false }, { id: 'other', name: '乙', connected: true, ready: false },
@@ -1123,6 +1145,12 @@ vm.runInContext(page.match(/function updateSubmitButton\(\) \{[\s\S]*?\n\}/)[0] 
 context.render();
 assert.match(elements.get('restartplayers').innerHTML, /<span class="avatar" data-player-id="me"[^>]*role="img"/, '自己的头像只展示，不能点');
 assert.match(elements.get('restartplayers').innerHTML, /<button class="avatar" data-player-id="other"[^>]*type="button">/, '别人的头像可以点开反馈菜单');
+const avatarImage = (id, name) => context.avatar({ id, name, connected: true }, name).match(/<img src="([^"]+)" width="44" height="44" alt="">/)[1];
+assert.equal(avatarImage('me', '甲'), 'https://api.dicebear.com/10.x/fun-emoji/svg?seed=%E7%94%B2', '头像使用 Fun Emoji 主题和完整昵称');
+assert.equal(avatarImage('me', '同名玩家'), avatarImage('other', '同名玩家'), '同名玩家的头像不受玩家 ID 影响');
+assert.notEqual(avatarImage('me', '甲一'), avatarImage('me', '甲二'), '种子不能只取昵称首字');
+assert.equal(new URL(avatarImage('me', '昵称 &?=#"<>😀')).searchParams.get('seed'), '昵称 &?=#"<>😀', '中文、表情及特殊字符不能破坏图片地址');
+assert.equal(new URL(avatarImage('me', '12345678901😀'.slice(0, 12))).searchParams.get('seed'), '12345678901�', '昵称截断到半个表情时仍能渲染头像');
 assert.equal(elements.get('roomexitbtn').hidden, true, '结算页隐藏顶部退出入口');
 const readySquare = elements.get('restartplayers').children[0];
 const otherSquare = elements.get('restartplayers').children[1];
@@ -1175,6 +1203,9 @@ context.render();
 assert.equal(bursts, 2, '下一局进入结算仍应正常播放礼花');
 assert.equal(elements.get('restartplayers').children.length, 3);
 assert.match(elements.get('restartcount').textContent, /1 人断线/, '仍有两人在线时也应提示断线人数');
+context.view.players[0].name = '新昵称';
+context.render();
+assert.ok(elements.get('restartplayers').innerHTML.includes(avatarImage('me', '新昵称')), '结算页重连改名后更新头像种子');
 context.view = null;
 elements.get('leavedialog').open = true;
 context.render();
