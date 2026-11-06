@@ -307,6 +307,59 @@ assert.equal(D.view.recordable, true, '重连后全员完成可以保存战绩')
 D.send({ t: 'leave' });
 assert.equal((await E3.left).dissolved, true, '有计时器的房间也应能正常解散');
 
+/* ---------- 切换浏览器后重连：全员已提交须立即补结算 ---------- */
+for (const timeout of [0, 30]) {
+  for (const matched of [true, false]) {
+    for (const bothOffline of [false, true]) {
+      const host = client(), guest = client();
+      await Promise.all([host.ready, guest.ready]);
+      host.send({ t: 'create', token: 'switch-host', config: { max: 2, timeout } });
+      await host.until((v) => v.phase === 'lobby');
+      const room = host.view.code;
+      guest.send({ t: 'join', room, token: 'switch-guest' });
+      await host.until((v) => v.players.length === 2);
+      host.send({ t: 'start' });
+      await guest.until((v) => v.phase === 'play');
+      host.send({ t: 'submit', word: '星星' });
+      await guest.until((v) => v.players[0].submitted);
+      host.ws.close();
+      await guest.until((v) => !v.players[0].connected);
+      guest.send({ t: 'submit', word: matched ? '星星' : '月亮' });
+      await guest.until((v) => v.players.every((p) => p.submitted));
+      assert.equal(guest.view.history.length, 0, '仅一人在线时保留答案，等待重连');
+      if (bothOffline) {
+        guest.ws.close();
+        await once(guest.ws, 'close');
+      }
+      const returnedHost = client();
+      await returnedHost.ready;
+      returnedHost.send({ t: 'join', room, token: 'switch-host', resume: true });
+      let returnedGuest = guest;
+      if (bothOffline) {
+        await returnedHost.until((v) => v.players.filter((p) => p.connected).length === 1);
+        assert.equal(returnedHost.view.history.length, 0, '首位重连时不能单人结算');
+        returnedGuest = client();
+        await returnedGuest.ready;
+        returnedGuest.send({ t: 'join', room, token: 'switch-guest', resume: true });
+      }
+      for (const c of [returnedHost, returnedGuest]) {
+        await c.until((v) => v.history.length === 1);
+        assert.equal(c.view.phase, matched ? 'done' : 'play');
+        assert.equal(c.view.round, matched ? 1 : 2);
+        assert.equal(c.view.history[0].matched, matched);
+        assert.deepEqual(c.view.history[0].items.map((p) => p.word), ['星星', matched ? '星星' : '月亮']);
+      }
+      assert.equal(returnedHost.view.recordable, matched, '全员重连后成功仍可保存战绩');
+      returnedHost.send({ t: 'join', room, token: 'switch-host', resume: true });
+      await heartbeatStats(returnedHost);
+      assert.equal(returnedHost.view.history.length, 1, '重复同步不能重复结算');
+      returnedHost.send({ t: 'leave' });
+      await returnedGuest.left;
+      for (const c of [returnedHost, returnedGuest]) c.ws.close();
+    }
+  }
+}
+
 /* ---------- 默认热梗昵称：满房不重名、尊重自定义、重连保持 ---------- */
 const nicknameHost = client();
 await nicknameHost.ready;

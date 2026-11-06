@@ -181,7 +181,7 @@ function completeRound(room) {
   startRound(room);
 }
 
-// 在线玩家都提交了就结算，提交和掉线两条路径共用
+// 在线玩家都提交了就结算，提交、掉线和重连路径共用
 function completeIfAllSubmitted(room) {
   const alive = live(room);
   if (alive.length < 2 || !alive.every((p) => room.words.has(p.token))) return false;
@@ -267,6 +267,8 @@ function joinRoom(conn, room, name, token) {
   conn.room = room;
   room.touched = Date.now();
   send(conn.ws, { t: 'joined', token, playerId: room.players.get(token).id });
+  // 人数不足时保留的提交，在重连凑齐两人后补结算。
+  if (room.phase === 'play' && completeIfAllSubmitted(room)) return;
   // 人数不足时超时结算会暂停，重连凑齐两人后补结算。
   if (room.phase === 'play' && room.deadline && room.deadline <= Date.now() && live(room).length >= 2) {
     return completeRound(room);
