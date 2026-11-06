@@ -1081,6 +1081,26 @@ context.render();
 assert.equal(elements.get('wordhint').classList.contains('submitted'), false);
 assert.equal(elements.get('word').value, '');
 
+/* ---------- 有在线玩家发起认定时，引导其他玩家表态 ---------- */
+context.view.history = [{ round: 2, matched: false, items: [{ word: '土豆' }, { word: '马铃薯' }] }];
+context.view.players.push({ id: 'other', name: '乙', connected: true, vote: false });
+context.render();
+assert.equal(elements.get('votebtn').textContent, '第 2 轮算同频？');
+context.view.players[1].vote = true;
+context.render();
+assert.equal(elements.get('votebtn').textContent, '有人觉得第 2 轮算同频，去表态');
+context.view.players[0].vote = true;
+context.render();
+assert.equal(elements.get('votebtn').textContent, '已同意，等其他人表态');
+context.view.players[0].vote = false;
+context.view.players[1].vote = false;
+context.render();
+assert.equal(elements.get('votebtn').textContent, '第 2 轮算同频？', '撤回所有投票后恢复入口文案');
+context.view.players[1].vote = true;
+context.view.players[1].connected = false;
+context.render();
+assert.equal(elements.get('votebtn').textContent, '第 2 轮算同频？', '离线玩家的旧票不触发表态提示');
+
 /* ---------- 新结果只追加新增行并淡入，重复调用、减少动效与离开页面都干净 ---------- */
 const results = {
   children: [], top: 0, cap: 200,

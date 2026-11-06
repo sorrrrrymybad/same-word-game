@@ -146,7 +146,6 @@ h1{margin:0;font-size:30px;letter-spacing:.14em}
 #recorddeletebtn{color:var(--warn)}
 #recorddetailrounds{margin-top:20px;padding-top:16px;border-top:1px dashed var(--field-line)}
 #recorddetailrounds .player-name{display:none}
-#recorddetailrounds .rndhead{margin-bottom:4px}
 #recorddetailrounds .rndwords{row-gap:0}
 h2{margin:0 0 16px;font-size:16px;font-weight:600;color:var(--dim);letter-spacing:.08em}
 label,legend{display:block;font-size:12px;color:var(--dim);margin:0 0 6px;padding:0;letter-spacing:.06em}
@@ -257,13 +256,14 @@ ul{list-style:none;margin:0;padding:0}
 .rnd{border-radius:12px;margin-bottom:14px}
 .rnd.revealing{animation:result-in .2s ease-out}
 @keyframes result-in{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
-.rndhead{font-size:12px;color:var(--dim);letter-spacing:.1em;margin-bottom:8px}
+.rndhead{font-size:12px;color:var(--dim);letter-spacing:.1em;margin-bottom:4px}
 .rndwords{display:flex;gap:24px;overflow-x:auto;padding-bottom:6px;font-size:14.5px}
 .result-player{flex:1 0 calc((100% - 48px)/3);min-width:0;text-align:center}
 .answer{position:relative;display:block;overflow-wrap:anywhere;padding:9px 8px;border-radius:10px;border:1px solid transparent;background:var(--player-bg);color:var(--player-fg)}
 .result-player+.result-player .answer::before{content:'×';position:absolute;left:-25px;top:50%;transform:translateY(-50%);width:24px;color:var(--dim);font-weight:600}
 .player-name{display:block;margin-bottom:2px;color:var(--dim);font-size:12px;text-align:left;overflow-wrap:anywhere}
-.rnd:not(.success-round) .rndwords{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(calc((100% - 48px)/3),1fr);grid-template-rows:auto auto;align-items:start}
+.rnd:not(.success-round) .rndwords{row-gap:2px;display:grid;grid-auto-flow:column;grid-auto-columns:minmax(calc((100% - 48px)/3),1fr);grid-template-rows:auto auto;align-items:start}
+.rnd:not(.success-round) .rndwords:has(.result-player > .sr-only){row-gap:0}
 .rnd:not(.success-round) .result-player{display:grid;grid-template-rows:subgrid;grid-row:span 2;align-self:stretch;align-items:start}
 .rnd:not(.success-round) .answer{grid-row:2;font-size:var(--answer-size);line-height:20px}
 .rnd:not(.success-round) .answer::before{top:9px;transform:none;font-size:14.5px}
@@ -959,7 +959,8 @@ function render() {
       // 完全一致的那一轮服务器已经直接结束本局了，根本走不到这里
       const canVote = !last.matched;
       $('votebtn').hidden = !canVote;
-      $('votebtn').textContent = me?.vote ? '已同意，等其他人表态' : '这轮算同频？';
+      const othersVoted = v.players.some((p) => p.id !== playerId && p.connected && p.vote);
+      $('votebtn').textContent = me?.vote ? '已同意，等其他人表态' : othersVoted ? `有人觉得第 ${last.round} 轮算同频，去表态` : `第 ${last.round} 轮算同频？`;
       $('votebtn').classList.toggle('voted', !!me?.vote);
       $('votetitle').textContent = `第 ${last.round} 轮，算同频？`;
       const words = [...new Set(last.items.map((i) => i.word).filter(Boolean))];
