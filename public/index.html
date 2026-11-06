@@ -136,13 +136,16 @@ h1{margin:0;font-size:30px;letter-spacing:.14em}
 .record-meta{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 10px;color:var(--dim);font-size:12px}
 .record-answers{margin:12px 0 6px}
 .record-answers .result-player{flex-basis:calc((100% - 24px)/2);display:flex;flex-direction:column}
-.record-answers .answer{flex:1;border-color:var(--player-fg)}
+.record-answers .answer{flex:1;border-color:var(--player-fg);font-size:var(--answer-size)}
 .record-answers .player-name{color:var(--player-fg)}
+#recorddetailsummary .answer{font-size:calc(var(--answer-size) + 2px)}
 .record-actions{display:flex;justify-content:space-between;gap:12px;margin:16px 0}
 .record-actions button{padding:8px 12px;min-height:44px;font-size:13px}
 #recorddeletebtn{color:var(--warn)}
 #recorddetailrounds{margin-top:20px;padding-top:16px;border-top:1px dashed var(--field-line)}
 #recorddetailrounds .player-name{display:none}
+#recorddetailrounds .rndhead{margin-bottom:4px}
+#recorddetailrounds .rndwords{row-gap:0}
 h2{margin:0 0 16px;font-size:16px;font-weight:600;color:var(--dim);letter-spacing:.08em}
 label,legend{display:block;font-size:12px;color:var(--dim);margin:0 0 6px;padding:0;letter-spacing:.06em}
 input,button{font:inherit;color:inherit}
@@ -282,13 +285,13 @@ summary:hover{color:var(--fg)}
 .success-round .rndwords{flex-direction:column;gap:28px;overflow:visible}
 .success-round .result-player{position:relative;flex:auto;padding:20px 14px;border-radius:18px;background:var(--player-bg);color:var(--player-fg)}
 .success-round .player-name{text-align:center;color:inherit;margin-bottom:6px}
-.success-round .answer{padding:0;border:0;background:none;color:inherit;font-size:clamp(26px,6vw,38px);font-weight:700}
+.success-round .answer{padding:0;border:0;background:none;color:inherit;font-size:max(12px,calc(clamp(26px,6vw,38px) - max(0,var(--answer-length) - 4)*1.5px));font-weight:700}
 .success-round .answer::before{display:none}
 /* 乘号字形的视觉中心比行盒中心低约 2px。 */
 .success-round .result-player+.result-player::before{content:'×';position:absolute;display:flex;align-items:center;justify-content:center;top:-28px;left:0;width:100%;height:28px;transform:translateY(-2px);color:var(--dim);font-size:28px;font-weight:600;line-height:1}
 .success-round.many .rndwords{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 24px}
 .success-round.many .result-player{padding:12px 8px;border-radius:12px}
-.success-round.many .answer{font-size:clamp(18px,4.5vw,26px)}
+.success-round.many .answer{font-size:max(12px,calc(clamp(18px,4.5vw,26px) - max(0,var(--answer-length) - 4)*1.5px))}
 .success-round.many .result-player::before{display:none}
 .success-round.many .result-player:nth-child(even)::before{display:flex;top:50%;left:-24px;width:24px;transform:translateY(calc(-50% - 2px))}
 .slogan{font-size:20px;letter-spacing:.22em;color:var(--fg);margin:18px 0 4px}
@@ -745,7 +748,7 @@ function playerStyle(id, players = view?.players || []) {
 }
 
 // 每轮结果里的一个玩家答案，逐轮记录和战绩回看共用
-const answerRow = (item, players, nameClass) => `<span class="result-player" style="${playerStyle(item.id, players)};--answer-size:${Math.max(12, 14.5 - Math.max(0, Array.from(item.word || '未提交').length - 4) * .5)}px"><span class="${nameClass}">${esc(item.name)}</span><span class="answer">${esc(item.word || '未提交')}</span></span>`;
+const answerRow = (item, players, nameClass) => `<span class="result-player" style="${playerStyle(item.id, players)};--answer-length:${Array.from(item.word || '未提交').length};--answer-size:${Math.max(12, 14.5 - Math.max(0, Array.from(item.word || '未提交').length - 4) * .5)}px"><span class="${nameClass}">${esc(item.name)}</span><span class="answer">${esc(item.word || '未提交')}</span></span>`;
 
 function roundCard(r, featured = false, players = view?.players || []) {
   const words = r.items.map((i) => answerRow(i, players, r.items.length === 2 && !featured ? 'sr-only' : 'player-name')).join('');
