@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
 import { WebSocketServer } from 'ws';
 
@@ -85,7 +85,8 @@ function makeRoom(config) {
     endedBy: null,        // 'match' 服务器判定完全一致 | 'accepted' 玩家投票认定
     gameId: randomUUID(),
     completedAt: null,
-    interrupted: false,
+    recordable: false,
+    participants: new Set(), // 本局实际参与过的玩家令牌
     order: [],            // token 顺序
     players: new Map(),   // token -> { token, name, ws, connected }
     createdAt: Date.now(),
@@ -101,15 +102,15 @@ function view(room) {
     phase: room.phase,
     round: room.round,
     deadline: room.deadline,
-    hostId: hostOf(room),
+    hostId: room.players.get(hostOf(room))?.id ?? null,
     endedBy: room.endedBy,
     gameId: room.gameId,
     completedAt: room.completedAt,
-    interrupted: room.interrupted,
+    recordable: room.recordable,
     players: room.order.filter((t) => room.players.has(t)).map((t) => {
       const p = room.players.get(t);
       return {
-        id: t,
+        id: p.id,
         name: p.name,
         connected: p.connected,
         submitted: room.words.has(t),
@@ -127,7 +128,10 @@ const push = (room) => { const v = view(room); for (const p of room.players.valu
 /* ------------------------------ 回合结算 ------------------------------ */
 
 function startRound(room) {
-  if (room.round === 0) recordGameStart();
+  if (room.round === 0) {
+    room.participants = new Set(live(room).map((p) => p.token));
+    recordGameStart();
+  }
   room.round += 1;
   room.phase = 'play';
   room.words.clear();
@@ -151,7 +155,7 @@ function completeRound(room) {
   room.deadline = null;
 
   const items = room.order.filter((t) => room.players.get(t)?.connected).map((t) => ({
-    id: t,
+    id: room.players.get(t).id,
     name: room.players.get(t).name,
     word: room.words.has(t) ? room.words.get(t) : null,
   }));
@@ -167,6 +171,7 @@ function completeRound(room) {
     room.phase = 'done';
     room.endedBy = 'match';
     room.completedAt = Date.now();
+    room.recordable = canRecordGame(room);
     return push(room);
   }
 
@@ -182,6 +187,14 @@ function completeIfAllSubmitted(room) {
   return true;
 }
 
+function canRecordGame(room) {
+  const resultIds = new Set(room.history.at(-1).items.map((p) => p.id));
+  return [...room.participants].every((token) => {
+    const p = room.players.get(token);
+    return p?.connected && resultIds.has(p.id);
+  });
+}
+
 // 任何人改票后检查一次：所有在线玩家都认定 → 本局结束
 function settle(room) {
   if (room.phase !== 'play' || !room.history.length) return false;
@@ -191,6 +204,7 @@ function settle(room) {
   room.phase = 'done';
   room.endedBy = 'accepted';
   room.completedAt = Date.now();
+  room.recordable = canRecordGame(room);
   clearTimeout(room.timer);
   room.timer = null;
   room.deadline = null;
@@ -212,7 +226,8 @@ function resetGame(room) {
   room.endedBy = null;
   room.gameId = randomUUID();
   room.completedAt = null;
-  room.interrupted = false;
+  room.recordable = false;
+  room.participants.clear();
 }
 
 function restartIfReady(room) {
@@ -228,7 +243,6 @@ function joinRoom(conn, room, name, token) {
   const p = room.players.get(token);
 
   if (p) {                                   // 重连：换 socket，保留位置
-    if (room.phase === 'play' && p.ws !== conn.ws) room.interrupted = true;
     if (p.ws && p.ws !== conn.ws) { try { p.ws.close(); } catch {} }
     p.ws = conn.ws;
     p.connected = true;
@@ -238,6 +252,7 @@ function joinRoom(conn, room, name, token) {
     if (room.players.size >= room.config.max) return send(conn.ws, { t: 'error', msg: '房间已满' });
     room.players.set(token, {
       token,
+      id: randomUUID(),
       name: name || randomName(room),
       ws: conn.ws,
       connected: true,
@@ -245,10 +260,15 @@ function joinRoom(conn, room, name, token) {
     room.order.push(token);
   }
 
+  if (room.phase === 'play') room.participants.add(token);
   conn.token = token;
   conn.room = room;
   room.touched = Date.now();
-  send(conn.ws, { t: 'joined', token });
+  send(conn.ws, { t: 'joined', token, playerId: room.players.get(token).id });
+  // 人数不足时超时结算会暂停，重连凑齐两人后补结算。
+  if (room.phase === 'play' && room.deadline && room.deadline <= Date.now() && live(room).length >= 2) {
+    return completeRound(room);
+  }
   push(room);
 }
 
@@ -258,7 +278,7 @@ function onMessage(conn, m) {
   if (m.t === 'create') {
     const cfg = m.config || {};
     const room = makeRoom({
-      max: Math.min(8, Math.max(2, Number(cfg.max) || 2)),
+      max: Math.min(8, Math.max(2, Math.floor(Number(cfg.max)) || 2)),
       timeout: [30, 60, 0].includes(Number(cfg.timeout)) ? Number(cfg.timeout) : 0,
     });
     rooms.set(room.code, room);
@@ -363,11 +383,19 @@ const server = createServer(async (req, res) => {
       return res.end('not found');
     }
   }
-  if (path === '/' || path.startsWith('/r/')) {
-    // ponytail: 每次读盘，改前端不用重启；文件很小，交给系统页缓存
-    const html = await readFile(join(ROOT, 'public/index.html'));
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    return res.end(html);
+  if (path === '/' || path.startsWith('/r/') || path === '/api/version') {
+    try {
+      const html = await readFile(join(ROOT, 'public/index.html'), 'utf8');
+      const version = createHash('sha256').update(html).digest('hex');
+      res.writeHead(200, {
+        'content-type': path === '/api/version' ? 'application/json; charset=utf-8' : 'text/html; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      return res.end(path === '/api/version' ? JSON.stringify({ version }) : html.replace('__PAGE_VERSION__', version));
+    } catch {
+      res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      return res.end('temporarily unavailable');
+    }
   }
   res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
   res.end('not found');
@@ -383,9 +411,23 @@ wss.on('connection', (ws) => {
     ws.lastSeenAt = Date.now();
     let m;
     try { m = JSON.parse(raw); } catch { return; }
-    if (m?.t === 'ping') {
+    if (!m || typeof m !== 'object' || Array.isArray(m) || typeof m.t !== 'string') return;
+    if (['token', 'name', 'room', 'word'].some((key) => m[key] !== undefined && typeof m[key] !== 'string')
+        || (m.token !== undefined && (!m.token || m.token.length > 128))
+        || (m.resume !== undefined && typeof m.resume !== 'boolean')
+        || (m.config !== undefined && (!m.config || typeof m.config !== 'object' || Array.isArray(m.config)
+          || ['max', 'timeout'].some((key) => m.config[key] !== undefined
+            && !['number', 'string'].includes(typeof m.config[key]))))) {
+      return send(ws, { t: 'error', msg: '消息格式无效' });
+    }
+    if (m.t === 'ping') {
       if (typeof m.id === 'number' && Number.isFinite(m.id)) send(ws, { t: 'pong', id: m.id, stats: publicStats() });
       return;
+    }
+    if ((m.t === 'create' || m.t === 'join') && conn.room
+        && rooms.get(conn.room.code) === conn.room && conn.room.players.get(conn.token)?.ws === ws
+        && !(m.t === 'join' && m.room?.toUpperCase() === conn.room.code && m.token === conn.token)) {
+      return send(ws, { t: 'error', msg: '请先退出当前房间' });
     }
     if (m.t === 'join') {
       const room = rooms.get(String(m.room || '').toUpperCase());
@@ -396,12 +438,13 @@ wss.on('connection', (ws) => {
     onMessage(conn, m);
   });
 
+  ws.on('error', () => ws.close());
+
   ws.on('close', () => {
     const room = conn.room;
     if (!room || !conn.token || rooms.get(room.code) !== room) return;
     const p = room.players.get(conn.token);
     if (!p || p.ws !== ws) return;         // 已被新连接顶替，忽略
-    if (room.phase === 'play') room.interrupted = true;
     p.connected = false;
     p.ws = null;
     room.ready.delete(conn.token);

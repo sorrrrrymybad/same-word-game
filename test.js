@@ -6,6 +6,7 @@ import { once } from 'node:events';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { WebSocket } from 'ws';
+import { createHash } from 'node:crypto';
 
 // 随机端口：上一次断言失败的测试不会杀子进程，固定端口会被孤儿进程占着跑旧代码
 const PORT = 3100 + Math.floor(Math.random() * 500);
@@ -39,6 +40,7 @@ function client() {
   c.left = new Promise((resolve) => { c.resolveLeft = resolve; });
   ws.on('message', (raw) => {
     const m = JSON.parse(raw);
+    if (m.t === 'joined') c.id = m.playerId;
     if (m.t === 'error') c.errors.push(m.msg);
     if (m.t === 'left') c.resolveLeft(m);
     if (m.t === 'state') { c.view = m.view; c.waiters = c.waiters.filter((w) => !w(c.view)); }
@@ -105,8 +107,8 @@ const firstGameId = A.view.gameId;
 assert.equal(code.length, 4);
 assert.equal(typeof firstGameId, 'string');
 assert.equal(A.view.completedAt, null);
-assert.equal(A.view.interrupted, false);
-assert.equal(A.view.hostId, 'tokA');
+assert.equal(A.view.recordable, false);
+assert.equal(A.view.hostId, A.id);
 assert.equal((await getStats()).startedGames, 0, '创建房间不算开局');
 
 B.send({ t: 'join', room: code, token: 'tokB', name: '乙' });
@@ -131,8 +133,8 @@ assert.equal((await heartbeatStats(C)).startedGames, 1, '首页访客的心跳�
 A.send({ t: 'submit', word: '猫' });
 await new Promise((r) => setTimeout(r, 150));
 assert.ok(!JSON.stringify(A.view).includes('猫'), '本轮已提交的词不能出现在下发的状态里');
-assert.equal(A.view.players.find((p) => p.id === 'tokA').submitted, true);
-assert.equal(A.view.players.find((p) => p.id === 'tokB').submitted, false);
+assert.equal(A.view.players.find((p) => p.id === A.id).submitted, true);
+assert.equal(A.view.players.find((p) => p.id === B.id).submitted, false);
 
 // 第二个词一到就立刻结算并进入下一轮，不一致不会自动结束本局
 B.send({ t: 'submit', word: '狗' });
@@ -150,12 +152,12 @@ assert.match(await A.untilError(), /出现过了/);
 
 // 投票是 toggle，且必须全员同意
 A.send({ t: 'vote' });
-await A.until((v) => v.players.find((p) => p.id === 'tokA').vote === true);
+await A.until((v) => v.players.find((p) => p.id === A.id).vote === true);
 assert.equal(A.view.phase, 'play', '只有一个人投票时本局不能结束');
 A.send({ t: 'vote' });
-await A.until((v) => v.players.find((p) => p.id === 'tokA').vote === false);
+await A.until((v) => v.players.find((p) => p.id === A.id).vote === false);
 A.send({ t: 'vote' });
-await A.until((v) => v.players.find((p) => p.id === 'tokA').vote === true);
+await A.until((v) => v.players.find((p) => p.id === A.id).vote === true);
 B.send({ t: 'vote' });
 await A.until((v) => v.phase === 'done');
 assert.equal(A.view.endedBy, 'accepted', '投票认定的结束方式');
@@ -166,13 +168,13 @@ const firstCompletedAt = A.view.completedAt;
 
 /* ---------- 第二局：完全一致 -> 服务器直接判成功 ---------- */
 A.send({ t: 'restart' });
-await A.until((v) => v.phase === 'done' && v.players.find((p) => p.id === 'tokA').ready);
+await A.until((v) => v.phase === 'done' && v.players.find((p) => p.id === A.id).ready);
 assert.equal(A.view.history.length, 1, '一人准备不能清空上一局');
 assert.equal(A.view.completedAt, firstCompletedAt, '准备更新不能改变对局时间');
 A.send({ t: 'restart' });
-await A.until((v) => !v.players.find((p) => p.id === 'tokA').ready);
+await A.until((v) => !v.players.find((p) => p.id === A.id).ready);
 B.send({ t: 'restart' });
-await A.until((v) => v.players.find((p) => p.id === 'tokB').ready);
+await A.until((v) => v.players.find((p) => p.id === B.id).ready);
 assert.equal((await getStats()).startedGames, 1, '准备未齐不计数');
 const savedStats = readFileSync(serverEnv.STATS_FILE, 'utf8');
 mkdirSync(serverEnv.STATS_FILE + '.tmp');
@@ -183,7 +185,7 @@ assert.equal(A.view.endedBy, null);
 assert.ok(A.view.players.every((p) => !p.ready), '新局应清空所有准备状态');
 assert.notEqual(A.view.gameId, firstGameId, '每局应有独立标识，支持本地去重');
 assert.equal(A.view.completedAt, null);
-assert.equal(A.view.interrupted, false);
+assert.equal(A.view.recordable, false);
 assert.equal((await getStats()).startedGames, 2, '再来一局成功开启时计一次');
 assert.equal((await heartbeatStats(C)).startedGames, 2, '再来一局后随心跳更新统计');
 assert.equal(readFileSync(serverEnv.STATS_FILE, 'utf8'), savedStats, '写入失败保留原有统计文件');
@@ -204,7 +206,7 @@ assert.equal(A.view.round, 2, '结束后不应再开新一轮');
 assert.equal(A.view.history.length, 2);
 assert.equal(A.view.history[1].matched, true);
 assert.ok(Number.isFinite(A.view.completedAt));
-assert.equal(A.view.interrupted, false);
+assert.equal(A.view.recordable, true);
 
 // 结束后不能再提交
 A.send({ t: 'submit', word: '太阳' });
@@ -214,11 +216,11 @@ assert.equal(A.view.history.length, 2, '结束后不应产生新轮次或新票'
 
 /* ---------- 主动退出与解散 ---------- */
 A.send({ t: 'restart' });
-await A.until((v) => v.players.find((p) => p.id === 'tokA').ready);
+await A.until((v) => v.players.find((p) => p.id === A.id).ready);
 B.send({ t: 'leave' });
 assert.equal((await B.left).dissolved, undefined, '普通玩家退出不解散房间');
 await A.until((v) => v.phase === 'lobby' && v.players.length === 1);
-assert.equal(A.view.hostId, 'tokA');
+assert.equal(A.view.hostId, A.id);
 assert.equal(A.view.players[0].ready, false);
 assert.equal(A.view.players[0].submitted, false);
 assert.deepEqual(A.view.history, []);
@@ -228,7 +230,7 @@ A.send({ t: 'start' });
 assert.match(await A.untilError(), /至少需要两个人/);
 C.send({ t: 'join', room: code, token: 'tokC', name: '丙' });
 await A.until((v) => v.players.length === 2);
-assert.equal(A.view.players[1].id, 'tokC', '退出后的空位应可以重新加入');
+assert.equal(A.view.players[1].id, C.id, '退出后的空位应可以重新加入');
 A.send({ t: 'leave' });
 assert.equal((await A.left).dissolved, true);
 assert.equal((await C.left).dissolved, true, '房主解散应通知其他玩家返回主页');
@@ -258,36 +260,36 @@ await D.until((v) => v.phase === 'play' && v.round === 1);
 for (const c of [D, E]) c.send({ t: 'submit', word: '云朵' });
 await D.until((v) => v.phase === 'done' && v.history[0].items[0].word === '云朵');
 assert.equal(D.view.history[0].items.length, 2, '离线玩家不阻塞在线玩家的结算');
-assert.equal(D.view.interrupted, false, '开局前已离线的玩家不算中途断线');
+assert.equal(D.view.recordable, true, '开局前已离线且未参与本局的玩家不影响保存');
 const completedBeforeDisconnect = D.view.completedAt;
 E.send({ t: 'restart' });
-await D.until((v) => v.players.find((p) => p.id === 'tokE').ready);
+await D.until((v) => v.players.find((p) => p.id === E.id).ready);
 E.ws.close();
-await D.until((v) => !v.players.find((p) => p.id === 'tokE').connected);
-assert.equal(D.view.players.find((p) => p.id === 'tokE').ready, false);
-assert.equal(D.view.interrupted, false, '成功之后断线不应作废已完成的战绩');
+await D.until((v) => !v.players.find((p) => p.id === E.id).connected);
+assert.equal(D.view.players.find((p) => p.id === E.id).ready, false);
+assert.equal(D.view.recordable, true, '成功之后断线不应作废已完成的战绩');
 assert.equal(D.view.completedAt, completedBeforeDisconnect);
 D.send({ t: 'restart' });
-await D.until((v) => v.players.find((p) => p.id === 'tokD').ready);
+await D.until((v) => v.players.find((p) => p.id === D.id).ready);
 assert.equal(D.view.phase, 'done', '只剩一人时不能自动开局');
 const E2 = client();
 await E2.ready;
 E2.send({ t: 'join', room: anotherCode, token: 'tokE' });
-await E2.until((v) => v.players.find((p) => p.id === 'tokE').connected);
-assert.equal(E2.view.players.find((p) => p.id === 'tokE').ready, false);
+await E2.until((v) => v.players.find((p) => p.id === E.id).connected);
+assert.equal(E2.view.players.find((p) => p.id === E.id).ready, false);
 E2.send({ t: 'restart' });
 await D.until((v) => v.phase === 'play' && v.history.length === 0);
 E2.ws.close();
-await D.until((v) => !v.players.find((p) => p.id === 'tokE').connected);
-assert.equal(D.view.interrupted, true, '中途断线应标记本局不可留存');
+await D.until((v) => !v.players.find((p) => p.id === E.id).connected);
+assert.equal(D.view.recordable, false, '未结算前不能保存');
 const E3 = client();
 await E3.ready;
 E3.send({ t: 'join', room: anotherCode, token: 'tokE', resume: true });
-await E3.until((v) => v.players.find((p) => p.id === 'tokE').connected);
+await E3.until((v) => v.players.find((p) => p.id === E.id).connected);
 for (const c of [D, E3]) c.send({ t: 'submit', word: '太阳' });
 await D.until((v) => v.phase === 'done');
 assert.equal(D.view.endedBy, 'match');
-assert.equal(D.view.interrupted, true, '重连后完成也不能留存中断的对局');
+assert.equal(D.view.recordable, true, '重连后全员完成可以保存战绩');
 D.send({ t: 'leave' });
 assert.equal((await E3.left).dissolved, true, '有计时器的房间也应能正常解散');
 
@@ -305,14 +307,14 @@ const nicknames = nicknameHost.view.players.map((p) => p.name);
 assert.equal(nicknames[0], '爱你老己', '自定义昵称应保留');
 assert.equal(new Set(nicknames).size, 8, '默认昵称应避开房间内已有昵称，包括自定义昵称');
 assert.ok(nicknames.every((name) => name.trim() && name.length <= 12 && !/^玩家\d+$/.test(name)));
-const assignedName = nicknameHost.view.players.find((p) => p.id === 'nickname-0').name;
+const assignedName = nicknameHost.view.players.find((p) => p.id === guests[0].id).name;
 guests[0].ws.close();
-await nicknameHost.until((v) => !v.players.find((p) => p.id === 'nickname-0').connected);
+await nicknameHost.until((v) => !v.players.find((p) => p.id === guests[0].id).connected);
 const reconnectGuest = client();
 await reconnectGuest.ready;
 reconnectGuest.send({ t: 'join', room: nicknameCode, token: 'nickname-0' });
-await reconnectGuest.until((v) => v.players.find((p) => p.id === 'nickname-0').connected);
-assert.equal(reconnectGuest.view.players.find((p) => p.id === 'nickname-0').name, assignedName);
+await reconnectGuest.until((v) => v.players.find((p) => p.id === guests[0].id).connected);
+assert.equal(reconnectGuest.view.players.find((p) => p.id === guests[0].id).name, assignedName);
 nicknameHost.send({ t: 'leave' });
 await reconnectGuest.left;
 
@@ -331,7 +333,7 @@ restoredHost.send({ t: 'join', room: savedCode, token: 'absent-host', resume: tr
 restoredGuest.send({ t: 'join', room: savedCode, token: 'absent-guest', resume: true });
 await restoredHost.until((v) => v.players.every((p) => p.connected));
 assert.equal(restoredHost.view.gameId, savedGameId);
-assert.equal(restoredHost.view.hostId, 'absent-host');
+assert.equal(restoredHost.view.hostId, absentHost.id);
 assert.deepEqual(restoredHost.view.players.map((p) => p.name), ['原房主', '原玩家']);
 restoredGuest.send({ t: 'leave' });
 await restoredGuest.left;
@@ -366,9 +368,196 @@ exitHost.send({ t: 'leave' });
 assert.equal((await exitHost.left).dissolved, true);
 assert.equal((await remainingGuest.left).dissolved, true);
 
+/* ---------- 多人局：重连后全员完成可保存，缺人完成不能事后补存 ---------- */
+const reconnectCompletedGames = [], missingPlayerGames = [];
+for (const endedBy of ['match', 'accepted']) {
+  for (const reconnectBeforeResult of [false, true]) {
+    const host = client(), guest = client(), third = client();
+    await Promise.all([host.ready, guest.ready, third.ready]);
+    host.send({ t: 'create', token: 'record-host', config: { max: 3 } });
+    await host.until((v) => v.phase === 'lobby');
+    const room = host.view.code;
+    guest.send({ t: 'join', room, token: 'record-guest' });
+    third.send({ t: 'join', room, token: 'record-third' });
+    await host.until((v) => v.players.length === 3);
+    host.send({ t: 'start' });
+    await third.until((v) => v.phase === 'play');
+    if (endedBy === 'accepted') {
+      [host, guest, third].forEach((c, i) => c.send({ t: 'submit', word: ['土豆', '马铃薯', '洋芋'][i] }));
+      await host.until((v) => v.round === 2);
+    }
+    third.ws.close();
+    await host.until((v) => v.players.some((p) => !p.connected));
+    let returned;
+    if (reconnectBeforeResult) {
+      returned = client();
+      await returned.ready;
+      returned.send({ t: 'join', room, token: 'record-third', resume: true });
+      await returned.until((v) => v.players.every((p) => p.connected));
+    }
+    for (const c of [host, guest, ...(returned ? [returned] : [])]) {
+      c.send(endedBy === 'match' ? { t: 'submit', word: '星星' } : { t: 'vote' });
+    }
+    await host.until((v) => v.phase === 'done');
+    assert.equal(host.view.endedBy, endedBy);
+    assert.equal(host.view.recordable, reconnectBeforeResult);
+    if (returned) reconnectCompletedGames.push(host.view);
+    else {
+      missingPlayerGames.push(host.view);
+      returned = client();
+      await returned.ready;
+      returned.send({ t: 'join', room, token: 'record-third', resume: true });
+      await returned.until((v) => v.phase === 'done');
+      assert.equal(returned.view.recordable, false, '缺人完成后重连不能改变保存资格');
+      missingPlayerGames.push(returned.view);
+    }
+    host.send({ t: 'leave' });
+    await returned.left;
+    for (const c of [host, guest, returned]) c.ws.close();
+  }
+}
+
+/* ---------- 消息校验、身份隔离及同一连接不能占用多个房间 ---------- */
+const guardedHost = client(), guardedGuest = client(), impostor = client();
+await Promise.all([guardedHost.ready, guardedGuest.ready, impostor.ready]);
+for (const invalid of [null, [], true, 42, 'text']) guardedHost.send(invalid);
+for (const invalid of [
+  { t: 'create', token: {} }, { t: 'create', name: { toString: null } },
+  { t: 'create', config: { max: {} } }, { t: 'create', config: null },
+  { t: 'join', room: [] }, { t: 'submit', word: {} }, { t: 'join', resume: 'true' },
+]) {
+  guardedHost.send(invalid);
+  assert.match(await guardedHost.untilError(), /消息格式无效/);
+}
+assert.ok(Number.isInteger((await heartbeatStats(guardedHost)).online), '异常消息不能导致服务退出');
+guardedHost.send({ t: 'create', token: 'guard-host-secret', config: { max: 2.5, timeout: 30 } });
+await guardedHost.until((v) => v.phase === 'lobby');
+const guardedCode = guardedHost.view.code;
+assert.equal(guardedHost.view.config.max, 2, '人数上限必须为整数');
+assert.notEqual(guardedHost.id, 'guard-host-secret');
+assert.equal(guardedHost.view.hostId, guardedHost.id);
+guardedGuest.send({ t: 'join', room: guardedCode, token: 'guard-guest-secret' });
+await guardedGuest.until((v) => v.players.length === 2);
+for (const token of [guardedHost.view.hostId, guardedGuest.id]) {
+  impostor.send({ t: 'join', room: guardedCode, token, resume: true });
+  assert.match(await impostor.untilError(), /连接已失效/);
+  impostor.send({ t: 'join', room: guardedCode, token });
+  assert.match(await impostor.untilError(), /房间已满/);
+}
+assert.equal(guardedHost.ws.readyState, 1);
+assert.equal(guardedGuest.ws.readyState, 1);
+impostor.send({ t: 'create', token: 'other-room-secret' });
+await impostor.until((v) => v.phase === 'lobby');
+for (const request of [
+  { t: 'create', token: 'new-secret' },
+  { t: 'join', room: impostor.view.code, token: 'new-secret' },
+  { t: 'join', room: guardedCode, token: 'new-secret' },
+]) {
+  guardedHost.send(request);
+  assert.match(await guardedHost.untilError(), /先退出当前房间/);
+  assert.equal(guardedHost.view.code, guardedCode);
+}
+guardedHost.send({ t: 'join', room: guardedCode, token: 'guard-host-secret', resume: true });
+await heartbeatStats(guardedHost);
+assert.equal(guardedHost.errors.length, 0, '同身份重复同步当前房间可以正常处理');
+guardedHost.send({ t: 'start' });
+await guardedGuest.until((v) => v.phase === 'play');
+guardedGuest.send({ t: 'submit', word: '月亮' });
+await guardedHost.until((v) => v.players.find((p) => p.id === guardedGuest.id).submitted);
+guardedHost.ws.close();
+await guardedGuest.until((v) => !v.players.find((p) => p.id === guardedHost.id).connected);
+
+/* ---------- 超时期间不足两人，重连后补结算并恢复下一轮计时 ---------- */
+await new Promise((resolve) => setTimeout(resolve, Math.max(0, guardedGuest.view.deadline - Date.now()) + 100));
+const resumedHost = client();
+await resumedHost.ready;
+resumedHost.send({ t: 'join', room: guardedCode, token: 'guard-host-secret', resume: true });
+await resumedHost.until((v) => v.round === 2);
+assert.equal(resumedHost.id, guardedHost.id, '重连保留公开身份及房主权限');
+assert.equal(resumedHost.view.hostId, guardedHost.id);
+assert.ok(resumedHost.view.deadline > Date.now(), '新一轮恢复有效倒计时');
+assert.deepEqual(resumedHost.view.history[0].items.map((p) => p.word), [null, '月亮']);
+assert.ok(!JSON.stringify(resumedHost.view).includes('guard-host-secret'));
+assert.ok(!JSON.stringify(resumedHost.view).includes('guard-guest-secret'), '状态及历史均不能泄露重连令牌');
+resumedHost.send({ t: 'leave' });
+await guardedGuest.left;
+impostor.send({ t: 'leave' });
+await impostor.left;
+for (const c of [resumedHost, guardedGuest, impostor]) c.ws.close();
+
 /* ---------- 客户端回归守卫 ---------- */
 // 局域网走 http，是非安全上下文，crypto.randomUUID 与 clipboard 都不存在。
 const page = await (await fetch(`http://127.0.0.1:${PORT}/`)).text();
+
+/* ---------- 页面版本随 HTML 内容变化，更新提示由用户决定是否刷新 ---------- */
+const versionResponse = await fetch(`http://127.0.0.1:${PORT}/api/version`);
+assert.equal(versionResponse.headers.get('cache-control'), 'no-store');
+const { version: pageVersion } = await versionResponse.json();
+assert.equal(pageVersion, createHash('sha256').update(readFileSync('public/index.html')).digest('hex'));
+assert.ok(page.includes(`const PAGE_VERSION = '${pageVersion}'`));
+assert.ok(!page.includes('__PAGE_VERSION__'));
+assert.equal((await fetch(`http://127.0.0.1:${PORT}/r/ABCD`)).headers.get('cache-control'), 'no-store');
+let servedHtml = readFileSync('public/index.html', 'utf8'), httpHandler;
+const serverSource = readFileSync('server.js', 'utf8');
+vm.runInNewContext(serverSource.slice(serverSource.indexOf('const server = createServer'), serverSource.indexOf('const wss =')), {
+  URL, createHash, ROOT: '', join, readFile: async () => servedHtml,
+  createServer: (handler) => { httpHandler = handler; },
+});
+async function readVersionRoute(path) {
+  const response = { writeHead(status, headers) { this.status = status; this.headers = headers; }, end(body) { this.body = body; } };
+  await httpHandler({ url: path }, response);
+  return response;
+}
+assert.equal(JSON.parse((await readVersionRoute('/api/version')).body).version, pageVersion);
+servedHtml += '\n<!-- updated -->';
+const nextVersion = JSON.parse((await readVersionRoute('/api/version')).body).version;
+assert.notEqual(nextVersion, pageVersion, '直接更新 HTML，无需重启即可获得新版本');
+assert.ok((await readVersionRoute('/')).body.includes(`const PAGE_VERSION = '${nextVersion}'`));
+const updateNodes = new Map();
+const updates = {
+  view: null, reloads: 0, result: { version: pageVersion }, ok: true,
+  $: (id) => {
+    if (!updateNodes.has(id)) updateNodes.set(id, { hidden: true, open: false, showModal() { this.open = true; }, close() { this.open = false; } });
+    return updateNodes.get(id);
+  },
+  location: { reload() { updates.reloads++; } },
+  fetch: async (url, options) => {
+    assert.equal(url, '/api/version');
+    assert.equal(options.cache, 'no-store');
+    if (updates.fail) throw new Error('offline');
+    return { ok: updates.ok, json: async () => updates.result };
+  },
+  setInterval(fn, ms) { assert.equal(ms, 30000); updates.poll = fn; },
+};
+vm.createContext(updates);
+vm.runInContext(page.slice(page.indexOf('const PAGE_VERSION ='), page.indexOf('/* ------------------------------ 连接')), updates);
+await updates.checkPageVersion();
+assert.equal(updates.$('updatebanner').hidden, true);
+updates.result = { version: nextVersion };
+await updates.poll();
+assert.equal(updates.$('updatebanner').hidden, false);
+assert.equal(updates.reloads, 0, '发现更新不能自动刷新或打开弹窗');
+assert.equal(updates.$('updatedialog').open, false);
+updates.fail = true;
+await updates.checkPageVersion();
+assert.equal(updates.$('updatebanner').hidden, false, '断网保留已有更新入口');
+updates.fail = false;
+updates.result = { version: 'bad-version' };
+await updates.checkPageVersion();
+assert.equal(updates.$('updatebanner').hidden, false, '无效响应不覆盖有效状态');
+updates.view = { phase: 'play' };
+updates.$('updatebtn').onclick();
+assert.equal(updates.$('updatedialog').open, true);
+assert.equal(updates.reloads, 0);
+updates.$('updatecancel').onclick();
+assert.equal(updates.$('updatedialog').open, false);
+assert.equal(updates.reloads, 0, '取消后继续对局');
+updates.$('updatebtn').onclick();
+updates.$('updateconfirm').onclick();
+assert.equal(updates.reloads, 1);
+updates.view = { phase: 'done' };
+updates.$('updatebtn').onclick();
+assert.equal(updates.reloads, 2, '对局结束后可直接主动刷新');
 
 /* ---------- 微信输入框适配仅限 iOS，且不限制页面缩放 ---------- */
 for (const [userAgent, platform, maxTouchPoints, wechatIOS] of [
@@ -643,7 +832,7 @@ assert.equal(toastElement.hidden, true, '不支持动画时仍能显示并自动
 const connectionStorage = new Map();
 function loadConnection(fromUrl = undefined) {
   const c = {
-    ws: null, view: null, fromUrl, TOKEN: 'saved-token', messages: [], notices: [], renders: 0,
+    ws: null, view: null, fromUrl, TOKEN: 'saved-token', playerId: 'saved-player', messages: [], notices: [], renders: 0,
     connectionOnline: false, roomSynced: false, latency: null,
     heartbeatTimer: null, heartbeatTimeout: null, heartbeatSentAt: null,
     now: 100, timers: new Map(), heartbeats: [],
@@ -715,9 +904,12 @@ assert.match(connection.notices[0], /无法保存房间连接/);
 /* ---------- 心跳测延迟，失效连接禁用提交，重连等房间同步 ---------- */
 connectionStorage.clear();
 connection = loadConnection();
+connection.receive({ t: 'joined', token: 'saved-token', playerId: 'saved-player' });
+assert.equal(connection.playerId, 'saved-player', '界面使用服务端返回的公开身份');
+assert.equal(connectionStorage.get('swg-token'), 'saved-token', '重连仍使用私密令牌');
 assert.equal(connection.$('connectionstatus').dataset.quality, 'good');
 assert.equal(connection.$('submitbtn').disabled, false);
-connection.view = { code: 'ABCD', players: [{ id: 'saved-token', submitted: false }] };
+connection.view = { code: 'ABCD', players: [{ id: 'saved-player', submitted: false }] };
 connection.timers.get(connection.heartbeatTimer)();
 connection.now += 250;
 connection.receive({ t: 'pong', id: connection.heartbeats.at(-1).id, stats: { online: 1234, startedGames: 5678 } });
@@ -750,10 +942,10 @@ connection.ws.onopen();
 connection.receive({ t: 'pong', id: connection.heartbeats.at(-1).id });
 assert.match(connection.$('connectionstatus').textContent, /同步中/, '重连成功后等待房间状态时显示同步中');
 assert.equal(connection.$('submitbtn').disabled, true, '恢复连接后还要等待房间状态');
-connection.receive({ t: 'state', view: { code: 'ABCD', players: [{ id: 'saved-token', submitted: true }] } });
+connection.receive({ t: 'state', view: { code: 'ABCD', players: [{ id: 'saved-player', submitted: true }] } });
 assert.equal(connection.$('submitbtn').disabled, true, '重连后已提交不能再次提交');
 assert.equal(connection.$('submitbtn')['aria-busy'], 'false');
-connection.receive({ t: 'state', view: { code: 'ABCD', players: [{ id: 'saved-token', submitted: false }] } });
+connection.receive({ t: 'state', view: { code: 'ABCD', players: [{ id: 'saved-player', submitted: false }] } });
 assert.equal(connection.$('submitbtn').disabled, false);
 
 /* ---------- 礼花只在进入结算时播放，准备及离线更新不重播 ---------- */
@@ -765,7 +957,7 @@ const context = {
   view: { phase: 'done', code: 'ABCD', config: { max: 2, timeout: 0 }, round: 1, endedBy: 'match', history: [{ round: 1, items: [] }], players: [
     { id: 'me', name: '甲', connected: true, ready: false }, { id: 'other', name: '乙', connected: true, ready: false },
   ] },
-  TOKEN: 'me', lastPhase: 'play', lastRound: 1, seenRound: null, saidResult: 0, saidRound: 0, saidVotes: 0, lobbyPlayerIds: new Set(),
+  playerId: 'me', lastPhase: 'play', lastRound: 1, seenRound: null, saidResult: 0, saidRound: 0, saidVotes: 0, lobbyPlayerIds: new Set(),
   reduceMotion: { matches: false }, location: { origin: 'http://localhost' },
   $: (id) => {
     if (!elements.has(id)) {
@@ -1008,7 +1200,7 @@ vm.runInContext(page.match(/const store = \{[\s\S]*?\n\};/)[0] + '\n' + page.mat
   ['playerStyle', 'roundCard', 'readLocalRecords', 'saveSuccessfulGame', 'recordSummary', 'renderLocalRecords', 'showLocalRecord', 'deleteLocalRecord']
     .map((name) => page.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))[0]).join('\n'), archive);
 const completedGame = {
-  phase: 'done', gameId: 'game-one', completedAt: Date.now(), endedBy: 'match', interrupted: false,
+  phase: 'done', gameId: 'game-one', completedAt: Date.now(), endedBy: 'match', recordable: true,
   players: [{ id: 'secret-a', name: '<甲>' }, { id: 'secret-off', name: '过客' }, { id: 'secret-b', name: '乙' }],
   history: [
     { round: 1, matched: false, items: [{ id: 'secret-a', name: '<甲>', word: '<b>猫</b>' }, { id: 'secret-b', name: '乙', word: '狗' }] },
@@ -1017,8 +1209,8 @@ const completedGame = {
 };
 archive.saveSuccessfulGame({ ...completedGame, phase: 'play' });
 archive.saveSuccessfulGame({ ...completedGame, phase: 'lobby' });
-archive.saveSuccessfulGame({ ...completedGame, interrupted: true });
-assert.equal(recordStorage.size, 0, '未完成、退出及中途断线的局不保存');
+archive.saveSuccessfulGame({ ...completedGame, recordable: false });
+assert.equal(recordStorage.size, 0, '未完成、退出及缺人完成的局不保存');
 archive.saveSuccessfulGame(completedGame);
 let storedRecords = JSON.parse(recordStorage.get(archive.RECORDS_KEY));
 assert.equal(storedRecords.length, 1);
@@ -1073,6 +1265,15 @@ assert.equal(recordElements.get('recordsnotice').hidden, false);
 assert.doesNotMatch(recordElements.get('recordslist').innerHTML, /game-one/);
 assert.equal(archive.deleteLocalRecord('game-two'), true);
 assert.equal(recordElements.get('recordsempty').hidden, false, '删除最后一条后显示空状态');
+
+// 使用真实服务器结算状态验证浏览器落盘，而不只检查资格字段。
+recordStorage.clear();
+for (const game of missingPlayerGames) archive.saveSuccessfulGame(game);
+assert.equal(recordStorage.size, 0, '缺人完成及事后重连到结果页都不保存');
+for (const game of reconnectCompletedGames) archive.saveSuccessfulGame(game);
+assert.equal(archive.readLocalRecords().length, 2, '重连后全员完成的完全一致和投票局均保存');
+for (const game of reconnectCompletedGames) archive.saveSuccessfulGame(game);
+assert.equal(archive.readLocalRecords().length, 2, '重连或重复结果状态不会重复保存');
 
 /* ---------- 配色对比度守卫：改配色前先过这一关 ---------- */
 const lin = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };

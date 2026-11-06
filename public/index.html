@@ -115,6 +115,8 @@ main{width:100%;max-width:540px;min-width:0}
 section{background:var(--card);border:1px solid var(--line-strong);border-radius:20px;padding:28px;box-shadow:var(--card-shadow);animation:in .28s ease}
 @keyframes in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 h1{margin:0;font-size:30px;letter-spacing:.14em}
+#updatebanner{position:fixed;z-index:110;top:calc(8px + env(safe-area-inset-top,0px));left:calc(18px + env(safe-area-inset-left,0px))}
+#updatebtn{min-height:44px;padding:0 12px;border-radius:22px;font-size:12px;white-space:nowrap;background:var(--card);border-color:var(--latency-slow);color:var(--latency-slow)}
 .sub{margin:6px 0 24px;color:var(--dim);font-size:13px;letter-spacing:.06em}
 .home-heading,.records-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .home-heading h1{min-width:0}
@@ -323,6 +325,10 @@ summary:hover{color:var(--fg)}
   <button id="roomexitbtn" class="icon-button" aria-label="退出房间" title="退出房间" hidden><svg viewBox="0 0 1024 1024" fill="currentColor" aria-hidden="true"><path d="M662.016 247.6544a32 32 0 1 1 29.4912-56.832 390.4 390.4 0 1 1-359.0144 0 32 32 0 1 1 29.4912 56.832 326.4 326.4 0 1 0 300.032 0zM544 384a32 32 0 1 1-64 0v-256a32 32 0 1 1 64 0v256z"/></svg></button>
   <button id="themebtn" title="切换主题"></button>
 </div>
+<div id="updatebanner" hidden>
+  <span class="sr-only" role="status">页面有新版本，可以刷新更新。</span>
+  <button id="updatebtn" class="ghost" aria-label="发现新版本，刷新更新" title="发现新版本，刷新更新">有更新</button>
+</div>
 <main>
 
 <section id="home">
@@ -447,7 +453,7 @@ summary:hover{color:var(--fg)}
     <h3>5. 再来一局，或返回主页</h3>
     <p>成功后点击「再来一局」准备，至少两名在线玩家全部准备后就会开始；再点一次可以取消准备。主动退出会中断当前对局，房主退出会解散房间。</p>
     <h3>6. 用「历」回看成功记录</h3>
-    <p>首页「历」按钮可以回看成功完成的对局。只有中途未断线、未退出的成功对局会保存；记录仅存在当前浏览器中，清除浏览器数据后无法找回。</p>
+    <p>首页「历」按钮可以回看成功完成的对局。成功结算时须本局参与者全部在线且都在成功轮结果中，缺人完成的对局不保存；记录仅存在当前浏览器中，清除浏览器数据后无法找回。</p>
   </div>
   <label class="rules-preference"><input id="rulesdontshow" type="checkbox">下次不再弹出</label>
 </dialog>
@@ -456,7 +462,7 @@ summary:hover{color:var(--fg)}
     <h2 id="recordstitle" tabindex="-1" autofocus>历史战绩</h2>
     <button id="recordsclose" class="ghost icon-button" aria-label="关闭历史记录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   </div>
-  <p id="recordsnotice" class="records-note">记录仅保存在本地，不会上传。清除浏览器数据或更换浏览器后无法找回。仅保存成功完成且中途未断线、未退出的对局。</p>
+  <p id="recordsnotice" class="records-note">记录仅保存在本地，不会上传。清除浏览器数据或更换浏览器后无法找回。</p>
   <div id="recordslistpanel">
     <p id="recordsempty" class="cfg">还没有成功对频的记录。下次接上脑回路，这里替你记一笔。</p>
     <ul id="recordslist"></ul>
@@ -497,6 +503,14 @@ summary:hover{color:var(--fg)}
     <button id="leaveconfirm"></button>
   </div>
 </dialog>
+<dialog id="updatedialog" aria-labelledby="updatetitle" aria-describedby="updatehint">
+  <h2 id="updatetitle" tabindex="-1" autofocus>现在刷新更新？</h2>
+  <p class="votes" id="updatehint">刷新会暂时断线，若断线期间其他玩家已完成同频，本局不保存。</p>
+  <div class="row">
+    <button id="updatecancel" class="ghost">继续游戏</button>
+    <button id="updateconfirm">确认刷新</button>
+  </div>
+</dialog>
 <div id="live" class="sr-only" role="status" aria-atomic="true"></div>
 <div id="toast" role="alert" hidden></div>
 
@@ -523,6 +537,7 @@ const TOKEN = store.get('swg-token') || (() => {
   return t;
 })();
 
+let playerId = null;
 let ws = null, view = null, lastRound = null, lastPhase = null, seenRound = null;
 let saidText = '', saidRound = 0, saidResult = 0, saidVotes = 0;
 let lobbyPlayerIds = new Set();
@@ -543,6 +558,27 @@ function announce(msg) {
   saidText = msg;
   $('live').textContent = msg;
 }
+
+/* ------------------------------ 页面更新 ------------------------------ */
+const PAGE_VERSION = '__PAGE_VERSION__';
+async function checkPageVersion() {
+  try {
+    const response = await fetch('/api/version', { cache: 'no-store' });
+    if (!response.ok) return;
+    const data = await response.json();
+    if (typeof data.version !== 'string' || !/^[a-f0-9]{64}$/.test(data.version)) return;
+    $('updatebanner').hidden = data.version === PAGE_VERSION;
+  } catch {} // 断网或部署中的短暂失败，等下次检查。
+}
+function requestPageUpdate() {
+  if (view?.phase === 'play') $('updatedialog').showModal();
+  else location.reload();
+}
+$('updatebtn').onclick = requestPageUpdate;
+$('updatecancel').onclick = () => $('updatedialog').close();
+$('updateconfirm').onclick = () => location.reload();
+setInterval(checkPageVersion, 30000);
+checkPageVersion();
 
 /* ------------------------------ 连接 ------------------------------ */
 let connectionOnline = false, roomSynced = false, latency = null;
@@ -589,7 +625,7 @@ function send(o) {
 
 function updateSubmitButton() {
   const waiting = !connectionOnline || !roomSynced;
-  $('submitbtn').disabled = waiting || !!view?.players?.find((p) => p.id === TOKEN)?.submitted;
+  $('submitbtn').disabled = waiting || !!view?.players?.find((p) => p.id === playerId)?.submitted;
   $('submitbtn').setAttribute('aria-busy', String(waiting));
   $('submitbtn').textContent = waiting ? (connectionOnline || latency === null ? '同步中' : '重连中') : '提交';
 }
@@ -665,7 +701,7 @@ function open() {
       if (m.msg === '房间不存在' || m.msg === '连接已失效，请重新加入房间') clearRoomUI();
       return;
     }
-    if (m.t === 'joined') { store.set('swg-token', m.token); return; }
+    if (m.t === 'joined') { playerId = m.playerId; store.set('swg-token', m.token); return; }
     if (m.t === 'left') {
       clearRoomUI();
       history.replaceState(null, '', '/');
@@ -776,7 +812,7 @@ function readLocalRecords() {
 }
 
 function saveSuccessfulGame(v) {
-  if (v.phase !== 'done' || !['match', 'accepted'].includes(v.endedBy) || v.interrupted !== false
+  if (v.phase !== 'done' || !['match', 'accepted'].includes(v.endedBy) || v.recordable !== true
       || typeof v.gameId !== 'string' || !Number.isFinite(v.completedAt) || !v.history.length
       || v.gameId === recordedGameId) return;
   recordedGameId = v.gameId;
@@ -859,7 +895,7 @@ function render() {
   const enteredDone = view?.phase === 'done' && lastPhase !== 'done';
   lastPhase = view?.phase ?? null;
   $('roomexitbtn').hidden = view?.phase !== 'play';
-  const exitLabel = view?.hostId === TOKEN ? '解散房间' : '退出房间';
+  const exitLabel = view?.hostId === playerId ? '解散房间' : '退出房间';
   $('roomexitbtn').setAttribute('aria-label', exitLabel);
   $('roomexitbtn').title = exitLabel;
   if ($('leavedialog').open && !view) $('leavedialog').close();
@@ -868,7 +904,7 @@ function render() {
   }
   if (!view) { screen('home'); return; }
   const v = view;
-  const me = v.players.find((p) => p.id === TOKEN);
+  const me = v.players.find((p) => p.id === playerId);
 
   const bits = [];
   if (v.phase === 'lobby') {
@@ -902,7 +938,7 @@ function render() {
     }).join('');
     lobbyPlayerIds = new Set(v.players.map((p) => p.id));
     $('lobbycount').textContent = `${v.players.length} / ${v.config.max}`;
-    const isHost = v.hostId === TOKEN;
+    const isHost = v.hostId === playerId;
     $('startbtn').hidden = !isHost;
     const connectedCount = v.players.filter((p) => p.connected).length;
     $('startbtn').disabled = connectedCount < 2;
@@ -1169,7 +1205,7 @@ $('restartbtn').onclick = () => send({ t: 'restart' });
 $('homebtn').onclick = $('lobbyhomebtn').onclick = $('roomexitbtn').onclick = requestLeave;
 function requestLeave() {
   if (!view) return;
-  const isHost = view.hostId === TOKEN;
+  const isHost = view.hostId === playerId;
   $('leavetitle').textContent = isHost ? '解散房间？' : '退出房间？';
   $('leavehint').textContent = isHost
     ? '你是房主，退出会解散房间。'
