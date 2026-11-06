@@ -39,6 +39,8 @@ const CODE_LEN = 4;
 const WORD_MAX = 20;
 const ROOM_TTL = 6 * 60 * 60 * 1000;
 const IDLE_TTL = 10 * 60 * 1000;
+const REACTIONS = ['tomato', 'like'];
+const REACT_GAP = 1000;
 const DEFAULT_NAMES = [
   '不烧心选手', '规矩不能坏', '良心小摊主', '贵点但靠谱',
   '大水理论家', '吨吨大水壶', '雷霆大水', '大觉特困生',
@@ -346,6 +348,15 @@ function onMessage(conn, m) {
     else room.ready.add(conn.token);
     if (!restartIfReady(room)) push(room);
     return;
+  }
+
+  // 砸番茄 / 点赞：只转发不存，每人每秒最多一次，多余的直接丢掉
+  if (m.t === 'react') {
+    const target = [...room.players.values()].find((p) => p.id === m.to);
+    if (!target?.connected || target === player || !REACTIONS.includes(m.kind)) return;
+    if (Date.now() - (player.reactedAt || 0) < REACT_GAP) return;
+    player.reactedAt = Date.now();
+    for (const p of room.players.values()) send(p.ws, { t: 'react', from: player.id, to: target.id, kind: m.kind });
   }
 }
 

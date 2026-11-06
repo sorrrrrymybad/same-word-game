@@ -45,6 +45,7 @@ function client() {
     if (m.t === 'left') c.resolveLeft(m);
     if (m.t === 'state') { c.view = m.view; c.waiters = c.waiters.filter((w) => !w(c.view)); }
     if (m.t === 'stats') c.statsPushes++;
+    if (m.t === 'react') (c.reacts ||= []).push(m);
   });
   c.send = (o) => ws.send(JSON.stringify(o));
   c.ready = new Promise((r) => ws.on('open', r));
@@ -113,6 +114,19 @@ assert.equal((await getStats()).startedGames, 0, '创建房间不算开局');
 
 B.send({ t: 'join', room: code, token: 'tokB', name: '乙' });
 await B.until((v) => v.players.length === 2);
+
+/* ---------- 砸番茄 / 点赞：只转发，校验目标和频率 ---------- */
+A.send({ t: 'react', to: B.id, kind: 'tomato' });
+A.send({ t: 'react', to: B.id, kind: 'like' });        // 一秒内第二次，丢掉
+B.send({ t: 'react', to: B.id, kind: 'like' });        // 不能给自己
+B.send({ t: 'react', to: A.id, kind: 'poop' });        // 只有番茄和点赞
+B.send({ t: 'react', to: 'nobody', kind: 'like' });
+await new Promise((r) => setTimeout(r, 150));
+for (const c of [A, B]) assert.deepEqual(c.reacts, [{ t: 'react', from: A.id, to: B.id, kind: 'tomato' }], '全房间收到同一条反馈');
+B.send({ t: 'react', to: A.id, kind: 'like' });        // 非法消息不占用频率额度
+await new Promise((r) => setTimeout(r, 150));
+assert.deepEqual(A.reacts.at(-1), { t: 'react', from: B.id, to: A.id, kind: 'like' });
+assert.ok(!JSON.stringify(A.view).includes('tomato'), '反馈不进入房间状态');
 
 const C = client();
 await C.ready;
@@ -965,7 +979,7 @@ const context = {
       elements.set(id, {
         open: false, dataset: {}, children: [],
         classList: { toggle(c, on) { if (on) classes.add(c); else classes.delete(c); }, contains(c) { return classes.has(c); } },
-        set innerHTML(html) { this.html = html; this.children = [...html.matchAll(/class="ready-square"/g)].map((_, i) => context.$(`${id}-${i}-${++elementVersion}`)); },
+        set innerHTML(html) { this.html = html; this.children = [...html.matchAll(/data-player-id=/g)].map((_, i) => context.$(`${id}-${i}-${++elementVersion}`)); },
         get innerHTML() { return this.html || ''; },
         setAttribute(name, value) { this[name] = value; }, blur() {}, replaceChildren() { this.children = []; }, close() { this.open = false; }, showModal() { this.open = true; },
       });
@@ -977,8 +991,11 @@ const context = {
 };
 let elementVersion = 0;
 vm.createContext(context);
-vm.runInContext(page.match(/function updateSubmitButton\(\) \{[\s\S]*?\n\}/)[0] + '\n' + page.match(/function screen\(name\) \{[\s\S]*?\n\}/)[0] + '\n' + page.match(/function render\(\) \{[\s\S]*?\n\}/)[0], context);
+vm.runInContext(page.match(/function updateSubmitButton\(\) \{[\s\S]*?\n\}/)[0] + '\n' + page.match(/function screen\(name\) \{[\s\S]*?\n\}/)[0] + '\n' + page.match(/function render\(\) \{[\s\S]*?\n\}/)[0]
+  + '\n' + page.match(/const OFFLINE_ICON = .*/)[0] + '\n' + page.match(/function avatar\([^]*?\n\}/)[0], context);
 context.render();
+assert.match(elements.get('restartplayers').innerHTML, /<span class="avatar" data-player-id="me"[^>]*role="img"/, '自己的头像只展示，不能点');
+assert.match(elements.get('restartplayers').innerHTML, /<button class="avatar" data-player-id="other"[^>]*type="button">/, '别人的头像可以点开反馈菜单');
 assert.equal(elements.get('roomexitbtn').hidden, true, '结算页隐藏顶部退出入口');
 const readySquare = elements.get('restartplayers').children[0];
 const otherSquare = elements.get('restartplayers').children[1];
@@ -1001,11 +1018,13 @@ assert.equal(elements.get('restartplayers').children[1], otherSquare, '断线玩
 assert.equal(otherSquare.classList.contains('offline'), true);
 assert.equal(otherSquare.classList.contains('on'), false);
 assert.equal(otherSquare['aria-label'], '乙，已断线');
+assert.equal(otherSquare.disabled, true, '断线玩家不能接收反馈');
 context.view.players[1].connected = true;
 context.render();
 assert.equal(elements.get('restartplayers').children[1], otherSquare, '重连应复用原方框');
 assert.equal(otherSquare.classList.contains('offline'), false);
 assert.equal(otherSquare['aria-label'], '乙，等待准备');
+assert.equal(otherSquare.disabled, false);
 context.view.players[1].ready = true;
 context.render();
 assert.equal(otherSquare.classList.contains('on'), true, '重连后仍可正常就位');
