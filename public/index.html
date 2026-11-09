@@ -107,8 +107,9 @@ body{isolation:isolate}
 ::view-transition-old(root){z-index:1}
 ::view-transition-new(root){z-index:2}
 main{width:100%;max-width:540px;min-width:0}
-#publicstats{margin-top:20px;text-align:center;font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums}
-.stat-number{display:inline-block;height:1.65em;overflow:hidden;vertical-align:bottom;line-height:1.65}
+/* 文字与定高数字容器使用相同字号，避免手机自动放大文字后数字显小、偏下。 */
+#publicstats{margin-top:20px;text-align:center;font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums;-webkit-text-size-adjust:100%;text-size-adjust:100%}
+.stat-number{display:inline-block;height:1.65em;overflow:hidden;vertical-align:top;line-height:1.65}
 .stat-reel,.stat-reel>span{display:block}
 .stat-reel>span{height:1.65em;white-space:nowrap}
 #play{display:grid;gap:16px}
