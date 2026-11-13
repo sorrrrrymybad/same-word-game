@@ -1,38 +1,15 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
+import { isIP } from 'node:net';
 import { WebSocketServer } from 'ws';
+import { getMetrics, recordVisit, recordGameStart, saveGame } from './database.js';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
-const STATS_FILE = process.env.STATS_FILE || join(ROOT, 'data/stats.json');
-let stats = { startedGames: 0, since: new Date().toISOString() };
-try {
-  const saved = JSON.parse(readFileSync(STATS_FILE, 'utf8'));
-  if (!saved || !Number.isSafeInteger(saved.startedGames) || saved.startedGames < 0
-      || typeof saved.since !== 'string' || !Number.isFinite(Date.parse(saved.since))) {
-    throw new Error('统计文件内容无效，请检查或恢复备份');
-  }
-  stats = { startedGames: saved.startedGames, since: saved.since };
-} catch (error) {
-  if (error.code !== 'ENOENT') throw error;
-  mkdirSync(dirname(STATS_FILE), { recursive: true });
-  writeFileSync(STATS_FILE, JSON.stringify(stats));
-}
-
-function recordGameStart() {
-  stats.startedGames += 1;
-  try {
-    writeFileSync(STATS_FILE + '.tmp', JSON.stringify(stats));
-    renameSync(STATS_FILE + '.tmp', STATS_FILE);
-  } catch (error) {
-    console.error('开局统计保存失败，当前进程仍继续计数，请检查统计目录：', error.message);
-  }
-}
 
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 去掉易混的 0 O 1 I
 const CODE_LEN = 4;
@@ -55,6 +32,14 @@ const rooms = new Map();
 const norm = (s) => s.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
 const live = (room) => [...room.players.values()].filter((p) => p.connected);
 const hostOf = (room) => room.order.find((t) => room.players.has(t)) ?? null;
+
+function clientIP(req) {
+  const remote = req.socket.remoteAddress?.replace(/^::ffff:/, '');
+  // 只信任本机代理追加的最后一跳，公网直连和客户端伪造的前缀不能覆盖 IP。
+  const forwarded = process.env.TRUST_PROXY === '1' && ['127.0.0.1', '::1'].includes(remote)
+    ? req.headers['x-forwarded-for']?.split(',').at(-1).trim() : null;
+  return isIP(forwarded || '') ? forwarded.replace(/^::ffff:/, '') : remote;
+}
 
 function randomName(room) {
   const used = new Set([...room.players.values()].map((p) => p.name));
@@ -89,6 +74,7 @@ function makeRoom(config) {
     completedAt: null,
     recordable: false,
     participants: new Set(), // 本局实际参与过的玩家令牌
+    gamePlayers: new Map(), // 仅服务端存档，包含开局或首次参与时的 IP
     order: [],            // token 顺序
     players: new Map(),   // token -> { token, name, ws, connected }
     createdAt: Date.now(),
@@ -131,8 +117,10 @@ const push = (room) => { const v = view(room); for (const p of room.players.valu
 
 function startRound(room) {
   if (room.round === 0) {
-    room.participants = new Set(live(room).map((p) => p.token));
-    recordGameStart();
+    const players = live(room);
+    room.gamePlayers = new Map(players.map((p) => [p.id, { id: p.id, name: p.name, ip: p.ip }]));
+    recordGameStart(room, [...room.gamePlayers.values()]);
+    room.participants = new Set(players.map((p) => p.token));
   }
   room.round += 1;
   room.phase = 'play';
@@ -146,6 +134,7 @@ function startRound(room) {
       if (room.phase === 'play') completeRound(room);
     }, room.config.timeout * 1000);
   }
+  saveGame(room);
   push(room);
 }
 
@@ -174,6 +163,7 @@ function completeRound(room) {
     room.endedBy = 'match';
     room.completedAt = Date.now();
     room.recordable = canRecordGame(room);
+    saveGame(room);
     return push(room);
   }
 
@@ -210,6 +200,7 @@ function settle(room) {
   clearTimeout(room.timer);
   room.timer = null;
   room.deadline = null;
+  saveGame(room);
   return true;
 }
 
@@ -230,6 +221,7 @@ function resetGame(room) {
   room.completedAt = null;
   room.recordable = false;
   room.participants.clear();
+  room.gamePlayers.clear();
 }
 
 function restartIfReady(room) {
@@ -248,6 +240,7 @@ function joinRoom(conn, room, name, token) {
     if (p.ws && p.ws !== conn.ws) { try { p.ws.close(); } catch {} }
     p.ws = conn.ws;
     p.connected = true;
+    p.ip = conn.ip;
     if (name) p.name = name;
   } else {
     if (room.phase !== 'lobby') return send(conn.ws, { t: 'error', msg: '游戏已经开始了' });
@@ -258,11 +251,19 @@ function joinRoom(conn, room, name, token) {
       name: name || randomName(room),
       ws: conn.ws,
       connected: true,
+      ip: conn.ip,
     });
     room.order.push(token);
   }
 
-  if (room.phase === 'play') room.participants.add(token);
+  if (room.phase === 'play') {
+    room.participants.add(token);
+    const player = room.players.get(token);
+    if (!room.gamePlayers.has(player.id)) {
+      room.gamePlayers.set(player.id, { id: player.id, name: player.name, ip: player.ip });
+    }
+    saveGame(room);
+  }
   conn.token = token;
   conn.room = room;
   room.touched = Date.now();
@@ -295,6 +296,7 @@ function onMessage(conn, m) {
   room.touched = Date.now();
 
   if (m.t === 'leave') {
+    if (room.phase === 'play') saveGame(room, 'aborted');
     conn.room = null;
     if (hostOf(room) === conn.token) {
       clearTimeout(room.timer);
@@ -327,7 +329,10 @@ function onMessage(conn, m) {
     if (!norm(raw)) return send(ws, { t: 'error', msg: '请输入一个词' });
     if (room.used.has(norm(raw))) return send(ws, { t: 'error', msg: `「${raw}」前面出现过了，换一个` });
     room.words.set(conn.token, raw);
-    if (!completeIfAllSubmitted(room)) push(room);
+    if (!completeIfAllSubmitted(room)) {
+      saveGame(room);
+      push(room);
+    }
     return;
   }
 
@@ -339,7 +344,7 @@ function onMessage(conn, m) {
     if (last.matched) return send(ws, { t: 'error', msg: '已经一致了，不用投票' });
     if (room.votes.get(conn.token) === true) room.votes.delete(conn.token);
     else room.votes.set(conn.token, true);
-    settle(room);
+    if (!settle(room)) saveGame(room);
     push(room);
     return;
   }
@@ -371,7 +376,7 @@ const lanIPs = Object.values(networkInterfaces()).flat()
 
 function publicStats() {
   const online = [...wss.clients].filter((ws) => ws.readyState === 1 && Date.now() - ws.lastSeenAt < 30_000).length;
-  return { online, startedGames: stats.startedGames };
+  return { online, startedGames: getMetrics().started_games.value };
 }
 
 const server = createServer(async (req, res) => {
@@ -402,12 +407,14 @@ const server = createServer(async (req, res) => {
     try {
       const html = await readFile(join(ROOT, 'public/index.html'), 'utf8');
       const version = createHash('sha256').update(html).digest('hex');
+      if (req.method === 'GET' && path !== '/api/version') recordVisit();
       res.writeHead(200, {
         'content-type': path === '/api/version' ? 'application/json; charset=utf-8' : 'text/html; charset=utf-8',
         'cache-control': 'no-store',
       });
       return res.end(path === '/api/version' ? JSON.stringify({ version }) : html.replace('__PAGE_VERSION__', version));
-    } catch {
+    } catch (error) {
+      console.error('页面读取或访问统计保存失败：', error.message);
       res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
       return res.end('temporarily unavailable');
     }
@@ -418,9 +425,9 @@ const server = createServer(async (req, res) => {
 
 const wss = new WebSocketServer({ server });
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
   ws.lastSeenAt = Date.now();
-  const conn = { ws, room: null, token: null };
+  const conn = { ws, ip: clientIP(req), room: null, token: null };
 
   ws.on('message', (raw) => {
     ws.lastSeenAt = Date.now();
@@ -474,9 +481,15 @@ wss.on('connection', (ws) => {
 
 setInterval(() => {
   const now = Date.now();
+  const time = new Date(now).toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai', hourCycle: 'h23' }).replace(' ', 'T');
+  console.log(`[online] ${time}+08:00 count=${publicStats().online}`);
   for (const [code, room] of rooms) {
     const dead = !live(room).length && now - room.touched > IDLE_TTL;
-    if (dead || now - room.createdAt > ROOM_TTL) rooms.delete(code);
+    if (dead || now - room.createdAt > ROOM_TTL) {
+      if (room.phase === 'play') saveGame(room, 'aborted');
+      clearTimeout(room.timer);
+      rooms.delete(code);
+    }
   }
 }, 60_000).unref();
 

@@ -10,6 +10,7 @@ module.exports = {
     env: {
       NODE_ENV: 'production',
       PORT: 3001,
+      TRUST_PROXY: '1', // 仅信任本机 Nginx 转发的访客 IP
     },
   }],
 };

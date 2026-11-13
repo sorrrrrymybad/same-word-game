@@ -1,27 +1,64 @@
 import { spawn } from 'node:child_process';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { once } from 'node:events';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { WebSocket } from 'ws';
 import { createHash } from 'node:crypto';
+import { isIP } from 'node:net';
 
 // 随机端口：上一次断言失败的测试不会杀子进程，固定端口会被孤儿进程占着跑旧代码
 const PORT = 3100 + Math.floor(Math.random() * 500);
 const statsDirectory = mkdtempSync(join(tmpdir(), 'same-word-stats-test-'));
-const serverEnv = { ...process.env, PORT, STATS_FILE: join(statsDirectory, 'stats.json') };
+const serverEnv = { ...process.env, PORT, STATS_FILE: join(statsDirectory, 'stats.json'),
+  DATABASE_FILE: join(statsDirectory, 'game.sqlite'), TRUST_PROXY: '0' };
 let srv = spawn(process.execPath, ['server.js'], { env: serverEnv, stdio: 'ignore' });
+let testDb;
 let started = false;
 srv.on('exit', (c) => { if (!started) { console.error(`服务端启动失败，退出码 ${c}`); process.exit(1); } });
-process.on('exit', () => { try { srv.kill(); } catch {} rmSync(statsDirectory, { recursive: true, force: true }); });
+process.on('exit', () => {
+  try { srv.kill(); } catch {}
+  if (testDb?.isOpen) testDb.close();
+  rmSync(statsDirectory, { recursive: true, force: true });
+});
 
 for (let i = 0; i < 60 && !started; i++) {
   try { await fetch(`http://127.0.0.1:${PORT}/`); started = true; }
   catch { await new Promise((r) => setTimeout(r, 50)); }
 }
 if (!started) { console.error('服务端 3 秒内没有就绪'); process.exit(1); }
+testDb = new DatabaseSync(serverEnv.DATABASE_FILE);
+const metric = (name) => testDb.prepare('SELECT * FROM metrics WHERE name = ?').get(name);
+const game = (id) => testDb.prepare('SELECT * FROM games WHERE id = ?').get(id);
+
+/* ---------- 访问只计 HTML GET，各项更新时间独立 ---------- */
+const initialVisits = metric('site_visits').value;
+const initialGameUpdate = metric('started_games').updated_at;
+for (const path of ['/api/stats', '/api/version', '/favicon.ico', '/missing']) {
+  await fetch(`http://127.0.0.1:${PORT}${path}`);
+}
+await fetch(`http://127.0.0.1:${PORT}/`, { method: 'HEAD' });
+assert.equal(metric('site_visits').value, initialVisits, '接口、资源、404 和 HEAD 不增加访问量');
+for (const path of ['/', '/r/ABCD']) await fetch(`http://127.0.0.1:${PORT}${path}`);
+assert.equal(metric('site_visits').value, initialVisits + 2);
+assert.equal(metric('started_games').updated_at, initialGameUpdate, '访问不改变开局更新时间');
+assert.ok(Number.isFinite(Date.parse(metric('site_visits').updated_at)));
+for (const row of testDb.prepare('SELECT * FROM metrics').all()) {
+  assert.match(row.since, /\+08:00$/);
+  assert.match(row.updated_at, /\+08:00$/);
+  assert.ok(Math.abs(Date.now() - Date.parse(row.updated_at)) < 5000, '时区转换保留真实时刻');
+}
+assert.equal(testDb.prepare('PRAGMA journal_mode').get().journal_mode, 'delete');
+const snapshotFile = join(statsDirectory, 'snapshot.sqlite');
+copyFileSync(serverEnv.DATABASE_FILE, snapshotFile);
+const initialSnapshot = new DatabaseSync(snapshotFile, { readOnly: true });
+assert.equal(initialSnapshot.prepare('SELECT count(*) AS count FROM metrics').get().count, 2,
+  '运行中主文件本身包含表及已提交统计，不依赖 WAL');
+assert.equal(initialSnapshot.prepare("SELECT value FROM metrics WHERE name = 'site_visits'").get().value, initialVisits + 2);
+initialSnapshot.close();
 
 async function getStats() {
   const response = await fetch(`http://127.0.0.1:${PORT}/api/stats`);
@@ -34,8 +71,8 @@ assert.deepEqual(Object.keys(await getStats()).sort(), ['online', 'startedGames'
 assert.equal((await getStats()).online, 0);
 assert.equal((await getStats()).startedGames, 0);
 
-function client() {
-  const ws = new WebSocket(`ws://127.0.0.1:${PORT}`);
+function client(headers = {}) {
+  const ws = new WebSocket(`ws://127.0.0.1:${PORT}`, { headers });
   const c = { ws, view: null, errors: [], waiters: [], statsPushes: 0 };
   c.left = new Promise((resolve) => { c.resolveLeft = resolve; });
   ws.on('message', (raw) => {
@@ -79,7 +116,7 @@ function heartbeatStats(c) {
   });
 }
 
-const A = client(), B = client();
+const A = client({ 'X-Forwarded-For': '198.51.100.9' }), B = client();
 await A.ready; await B.ready;
 assert.equal((await getStats()).online, 2, '首页访客也算在线');
 const visitor = client();
@@ -141,6 +178,14 @@ assert.equal(A.view.round, 1);
 assert.deepEqual(A.view.history, [], '开局时不应有历史');
 assert.equal(A.view.endedBy, null);
 assert.equal((await getStats()).startedGames, 1, '首次开局计一次');
+assert.equal(metric('started_games').value, 1);
+assert.equal(testDb.prepare('SELECT count(*) AS count FROM metrics').get().count, 2, '仅记录开局和访问两项');
+assert.equal(game(firstGameId).player_count, 2);
+assert.equal(game(firstGameId).status, 'play');
+assert.deepEqual(JSON.parse(game(firstGameId).players_json).map((p) => p.ip), ['127.0.0.1', '127.0.0.1'],
+  '默认不信任客户端提供的转发 IP');
+assert.ok(!JSON.stringify(A.view).includes('127.0.0.1'), 'IP 不下发客户端');
+assert.ok(!game(firstGameId).players_json.includes('tokA'), '私密重连令牌不存档');
 assert.equal((await heartbeatStats(C)).startedGames, 1, '首页访客的心跳也返回最新开局数');
 
 // 本轮提交的词绝不能提前泄露给对方
@@ -149,6 +194,7 @@ await new Promise((r) => setTimeout(r, 150));
 assert.ok(!JSON.stringify(A.view).includes('猫'), '本轮已提交的词不能出现在下发的状态里');
 assert.equal(A.view.players.find((p) => p.id === A.id).submitted, true);
 assert.equal(A.view.players.find((p) => p.id === B.id).submitted, false);
+assert.equal(JSON.parse(game(firstGameId).current_round_json).items[0].word, '猫', '未结算答案也持久化');
 
 // 第二个词一到就立刻结算并进入下一轮，不一致不会自动结束本局
 B.send({ t: 'submit', word: '狗' });
@@ -179,6 +225,13 @@ assert.equal(A.view.history.length, 1, '认定时本局共 1 轮');
 assert.equal(A.view.gameId, firstGameId);
 assert.ok(Number.isFinite(A.view.completedAt), '成功认定应记录完成时间');
 const firstCompletedAt = A.view.completedAt;
+assert.equal(game(firstGameId).status, 'done');
+assert.equal(game(firstGameId).ended_by, 'accepted');
+assert.deepEqual(JSON.parse(game(firstGameId).history_json), A.view.history);
+assert.ok(Number.isFinite(Date.parse(game(firstGameId).ended_at)));
+for (const column of ['started_at', 'updated_at', 'ended_at']) {
+  assert.match(game(firstGameId)[column], /\+08:00$/);
+}
 
 /* ---------- 第二局：完全一致 -> 服务器直接判成功 ---------- */
 A.send({ t: 'restart' });
@@ -190,8 +243,6 @@ await A.until((v) => !v.players.find((p) => p.id === A.id).ready);
 B.send({ t: 'restart' });
 await A.until((v) => v.players.find((p) => p.id === B.id).ready);
 assert.equal((await getStats()).startedGames, 1, '准备未齐不计数');
-const savedStats = readFileSync(serverEnv.STATS_FILE, 'utf8');
-mkdirSync(serverEnv.STATS_FILE + '.tmp');
 A.send({ t: 'restart' });
 await A.until((v) => v.phase === 'play' && v.round === 1);
 assert.deepEqual(A.view.history, []);
@@ -202,8 +253,8 @@ assert.equal(A.view.completedAt, null);
 assert.equal(A.view.recordable, false);
 assert.equal((await getStats()).startedGames, 2, '再来一局成功开启时计一次');
 assert.equal((await heartbeatStats(C)).startedGames, 2, '再来一局后随心跳更新统计');
-assert.equal(readFileSync(serverEnv.STATS_FILE, 'utf8'), savedStats, '写入失败保留原有统计文件');
-rmSync(serverEnv.STATS_FILE + '.tmp', { recursive: true });
+assert.equal(game(firstGameId).status, 'done', '再来一局不覆盖旧局');
+const secondGameId = A.view.gameId;
 
 // 大小写和写法不同不算一致
 A.send({ t: 'submit', word: '苹果' });
@@ -221,6 +272,13 @@ assert.equal(A.view.history.length, 2);
 assert.equal(A.view.history[1].matched, true);
 assert.ok(Number.isFinite(A.view.completedAt));
 assert.equal(A.view.recordable, true);
+assert.equal(game(secondGameId).ended_by, 'match');
+assert.deepEqual(JSON.parse(game(secondGameId).history_json), A.view.history);
+copyFileSync(serverEnv.DATABASE_FILE, snapshotFile);
+const completedSnapshot = new DatabaseSync(snapshotFile, { readOnly: true });
+assert.deepEqual(JSON.parse(completedSnapshot.prepare('SELECT history_json FROM games WHERE id = ?').get(secondGameId).history_json),
+  A.view.history, '已完成对局直接写入主文件');
+completedSnapshot.close();
 
 // 结束后不能再提交
 A.send({ t: 'submit', word: '太阳' });
@@ -566,6 +624,12 @@ assert.ok(!page.includes('__PAGE_VERSION__'));
 assert.equal((await fetch(`http://127.0.0.1:${PORT}/r/ABCD`)).headers.get('cache-control'), 'no-store');
 let servedHtml = readFileSync('public/index.html', 'utf8'), httpHandler;
 const serverSource = readFileSync('server.js', 'utf8');
+const ipContext = { isIP, process: { env: { TRUST_PROXY: '1' } } };
+vm.runInNewContext(serverSource.match(/function clientIP\([^]*?\n\}/)[0], ipContext);
+const ipRequest = (remoteAddress, forwarded) => ({ socket: { remoteAddress }, headers: { 'x-forwarded-for': forwarded } });
+assert.equal(ipContext.clientIP(ipRequest('203.0.113.8', '198.51.100.1')), '203.0.113.8', '公网直连不能伪造 IP');
+assert.equal(ipContext.clientIP(ipRequest('::ffff:127.0.0.1', '198.51.100.1, invalid')), '127.0.0.1');
+assert.equal(ipContext.clientIP(ipRequest('::1', '192.0.2.1, 2001:db8::1')), '2001:db8::1');
 vm.runInNewContext(serverSource.slice(serverSource.indexOf('const server = createServer'), serverSource.indexOf('const wss =')), {
   URL, createHash, ROOT: '', join, readFile: async () => servedHtml,
   createServer: (handler) => { httpHandler = handler; },
@@ -1503,29 +1567,163 @@ assert.ok(/:focus-visible/.test(page), '缺少键盘焦点样式');
 assert.ok(/role="status"/.test(page), '缺少给屏幕阅读器的 live region');
 assert.ok(/safe-area-inset/.test(page), '未处理移动端安全区');
 
-/* ---------- 统计重启恢复，坏文件不覆盖 ---------- */
+/* ---------- 分钟在线日志与过期局存档 ---------- */
+let minuteTick;
+const minuteLogs = [], expiredGames = [];
+const expiredRoom = { phase: 'play', touched: 0, createdAt: 0, timer: null };
+const logRooms = new Map([['OLD', expiredRoom]]);
+class LogDate extends Date {
+  static now() { return Date.parse('2026-11-13T16:30:00Z'); }
+}
+vm.runInNewContext(serverSource.slice(serverSource.lastIndexOf('setInterval(() => {'), serverSource.indexOf('server.listen(PORT')), {
+  Date: LogDate, console: { log: (line) => minuteLogs.push(line) }, publicStats: () => ({ online: 7 }),
+  rooms: logRooms, live: () => [], IDLE_TTL: 1, ROOM_TTL: 1, clearTimeout,
+  saveGame: (room, status) => expiredGames.push(status),
+  setInterval(fn, ms) { assert.equal(ms, 60_000); minuteTick = fn; return { unref() {} }; },
+});
+minuteTick();
+assert.equal(minuteLogs[0], '[online] 2026-11-14T00:30:00+08:00 count=7', '日志使用北京时间，跨日和午夜小时正确');
+assert.deepEqual(expiredGames, ['aborted']);
+assert.equal(logRooms.size, 0);
+
+/* ---------- 中断局保存、重启恢复、完成局不会被覆盖 ---------- */
+const interruptedHost = client(), interruptedGuest = client();
+await Promise.all([interruptedHost.ready, interruptedGuest.ready]);
+interruptedHost.send({ t: 'create', token: 'interrupt-host' });
+await interruptedHost.until((v) => v.phase === 'lobby');
+interruptedGuest.send({ t: 'join', room: interruptedHost.view.code, token: 'interrupt-guest' });
+await interruptedHost.until((v) => v.players.length === 2);
+interruptedHost.send({ t: 'start' });
+await interruptedGuest.until((v) => v.phase === 'play');
+interruptedGuest.send({ t: 'submit', word: '保留答案' });
+await interruptedHost.until((v) => v.players.some((p) => p.submitted));
+const interruptedId = interruptedHost.view.gameId;
 const beforeRestart = await getStats();
-assert.equal(JSON.parse(readFileSync(serverEnv.STATS_FILE, 'utf8')).startedGames, beforeRestart.startedGames);
+const metricsBeforeRestart = testDb.prepare('SELECT * FROM metrics ORDER BY name').all();
+assert.equal(metric('started_games').value, beforeRestart.startedGames);
+assert.equal(testDb.prepare('SELECT count(*) AS count FROM games').get().count, beforeRestart.startedGames);
+assert.equal(testDb.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
 let stopped = once(srv, 'exit');
 srv.kill();
 await stopped;
+writeFileSync(serverEnv.STATS_FILE, '{broken');
 srv = spawn(process.execPath, ['server.js'], { env: serverEnv, stdio: 'ignore' });
 async function waitForRestart() {
   for (let i = 0; i < 60; i++) {
-    try { if ((await fetch(`http://127.0.0.1:${PORT}/`)).ok) return; } catch {}
+    try { if ((await fetch(`http://127.0.0.1:${PORT}/api/stats`)).ok) return; } catch {}
     await new Promise((r) => setTimeout(r, 50));
   }
   throw new Error('重启失败');
 }
 await waitForRestart();
 assert.deepEqual(await getStats(), { ...beforeRestart, online: 0 }, '重启后累计值和统计起点保留，在线归零');
+assert.deepEqual(testDb.prepare('SELECT * FROM metrics ORDER BY name').all(), metricsBeforeRestart,
+  '已迁移的数据库不会重复读取旧 JSON，也不会因重启刷新更新时间');
+assert.equal(game(interruptedId).status, 'interrupted');
+assert.equal(JSON.parse(game(interruptedId).current_round_json).items[0].word, '保留答案');
+assert.equal(game(firstGameId).status, 'done');
+assert.ok(testDb.prepare("SELECT count(*) AS count FROM games WHERE status = 'aborted'").get().count > 0,
+  '中途退出的对局也保留');
 stopped = once(srv, 'exit');
 srv.kill();
 await stopped;
+testDb.close();
+
+/* ---------- 旧统计只迁移一次，可信单层代理的 IP 与事务回滚 ---------- */
+serverEnv.DATABASE_FILE = join(statsDirectory, 'migration.sqlite');
+serverEnv.TRUST_PROXY = '1';
+const legacyStats = JSON.stringify({ startedGames: 27, since: '2026-11-01T00:00:00.000Z' });
+writeFileSync(serverEnv.STATS_FILE, legacyStats);
+srv = spawn(process.execPath, ['server.js'], { env: serverEnv, stdio: 'ignore' });
+await waitForRestart();
+testDb = new DatabaseSync(serverEnv.DATABASE_FILE);
+assert.equal((await getStats()).startedGames, 27);
+assert.equal(metric('started_games').since, '2026-11-01T08:00:00.000+08:00');
+assert.equal(Date.parse(metric('started_games').since), Date.parse(JSON.parse(legacyStats).since));
+assert.equal(metric('site_visits').value, 0);
+assert.equal(readFileSync(serverEnv.STATS_FILE, 'utf8'), legacyStats, '迁移不改写原始文件');
+const proxyHost = client({ 'X-Forwarded-For': '192.0.2.9, 198.51.100.7' }), proxyGuest = client();
+await Promise.all([proxyHost.ready, proxyGuest.ready]);
+proxyHost.send({ t: 'create', token: 'proxy-host' });
+await proxyHost.until((v) => v.phase === 'lobby');
+proxyGuest.send({ t: 'join', room: proxyHost.view.code, token: 'proxy-guest' });
+await proxyHost.until((v) => v.players.length === 2);
+proxyHost.send({ t: 'start' });
+await proxyGuest.until((v) => v.phase === 'play');
+assert.equal(JSON.parse(game(proxyHost.view.gameId).players_json)[0].ip, '198.51.100.7');
+assert.equal((await getStats()).startedGames, 28);
+proxyHost.send({ t: 'leave' });
+await proxyGuest.left;
+assert.equal(game(proxyHost.view.gameId).status, 'aborted');
+
+// 在计数更新处制造故障，已插入的历史行必须随同回滚。
+testDb.exec(`CREATE TRIGGER fail_start BEFORE UPDATE ON metrics WHEN OLD.name = 'started_games'
+  BEGIN SELECT RAISE(ABORT, 'test write failure'); END`);
+const failedHost = client(), failedGuest = client();
+await Promise.all([failedHost.ready, failedGuest.ready]);
+failedHost.send({ t: 'create', token: 'failed-host' });
+await failedHost.until((v) => v.phase === 'lobby');
+failedGuest.send({ t: 'join', room: failedHost.view.code, token: 'failed-guest' });
+await failedHost.until((v) => v.players.length === 2);
+stopped = once(srv, 'exit');
+failedHost.send({ t: 'start' });
+assert.notEqual((await stopped)[0], 0, '数据库写入失败应明确报错停止，不静默丢失统计');
+assert.equal(metric('started_games').value, 28);
+assert.equal(game(failedHost.view.gameId), undefined, '开局记录和总数在同一事务中');
+testDb.exec('DROP TRIGGER fail_start');
+testDb.close();
+
+/* ---------- 升级时合并旧 WAL 中已提交但尚未写回主文件的数据 ---------- */
+srv = spawn(process.execPath, ['--input-type=module', '-e', `
+  import { DatabaseSync } from 'node:sqlite';
+  const db = new DatabaseSync(process.env.DATABASE_FILE);
+  db.exec("PRAGMA journal_mode = WAL; UPDATE metrics SET value = 321 WHERE name = 'site_visits';"
+    + "UPDATE metrics SET since = '2026-11-13T16:30:00.123Z', updated_at = '2026-11-13T16:30:00.123Z';"
+    + "UPDATE games SET started_at = '2026-12-31T20:30:00.456Z', updated_at = '2026-12-31T20:30:00.456Z', ended_at = '2026-12-31T20:30:00.456Z'");
+  process.kill(process.pid, 'SIGKILL');
+`], { env: serverEnv, stdio: 'ignore' });
+assert.equal((await once(srv, 'exit'))[1], 'SIGKILL');
+copyFileSync(serverEnv.DATABASE_FILE, snapshotFile);
+const staleSnapshot = new DatabaseSync(snapshotFile, { readOnly: true });
+assert.equal(staleSnapshot.prepare("SELECT value FROM metrics WHERE name = 'site_visits'").get().value, 0,
+  '复现单独复制 WAL 主文件遗漏已提交数据');
+staleSnapshot.close();
+srv = spawn(process.execPath, ['server.js'], { env: serverEnv, stdio: 'ignore' });
+await waitForRestart();
+testDb = new DatabaseSync(serverEnv.DATABASE_FILE);
+assert.equal(testDb.prepare('PRAGMA journal_mode').get().journal_mode, 'delete');
+assert.equal(metric('site_visits').value, 321, '切换日志模式后保留 WAL 中的提交');
+assert.equal(metric('started_games').value, 28);
+assert.equal(game(proxyHost.view.gameId).status, 'aborted');
+for (const row of testDb.prepare('SELECT * FROM metrics').all()) {
+  assert.equal(row.since, '2026-11-14T00:30:00.123+08:00', '旧统计 UTC 时间转换后跨日正确');
+  assert.equal(row.updated_at, row.since);
+}
+for (const column of ['started_at', 'updated_at', 'ended_at']) {
+  assert.equal(game(proxyHost.view.gameId)[column], '2027-01-01T04:30:00.456+08:00', '旧对局时间转换后跨年且保留毫秒');
+  assert.equal(Date.parse(game(proxyHost.view.gameId)[column]), Date.parse('2026-12-31T20:30:00.456Z'));
+}
+copyFileSync(serverEnv.DATABASE_FILE, snapshotFile);
+const upgradedSnapshot = new DatabaseSync(snapshotFile, { readOnly: true });
+assert.equal(upgradedSnapshot.prepare("SELECT value FROM metrics WHERE name = 'site_visits'").get().value, 321);
+assert.equal(upgradedSnapshot.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+upgradedSnapshot.close();
+stopped = once(srv, 'exit');
+srv.kill();
+await stopped;
+testDb.close();
+
+/* ---------- 坏文件不覆盖、不清零 ---------- */
+serverEnv.DATABASE_FILE = join(statsDirectory, 'bad-legacy.sqlite');
 writeFileSync(serverEnv.STATS_FILE, '{broken');
 srv = spawn(process.execPath, ['server.js'], { env: serverEnv, stdio: 'ignore' });
 assert.notEqual((await once(srv, 'exit'))[0], 0, '损坏统计文件不能悄悄清零');
 assert.equal(readFileSync(serverEnv.STATS_FILE, 'utf8'), '{broken');
+serverEnv.DATABASE_FILE = join(statsDirectory, 'broken.sqlite');
+writeFileSync(serverEnv.DATABASE_FILE, 'broken database');
+srv = spawn(process.execPath, ['server.js'], { env: serverEnv, stdio: 'ignore' });
+assert.notEqual((await once(srv, 'exit'))[0], 0, '损坏数据库不能清零');
+assert.equal(readFileSync(serverEnv.DATABASE_FILE, 'utf8'), 'broken database');
 
 console.log('✅ 全部通过');
 srv.kill();
